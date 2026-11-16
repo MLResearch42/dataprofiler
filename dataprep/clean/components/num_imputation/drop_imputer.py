@@ -2,10 +2,11 @@
 Implement numerical drop imputer.
 """
 
-from typing import Any, Union, List, Optional
-import dask.dataframe as dd
-from dask.dataframe import from_pandas
+from typing import Any, List, Optional, Union
+
 import pandas as pd
+
+from ...utils import in_null_values
 
 
 class DropImputer:
@@ -30,7 +31,7 @@ class DropImputer:
         self.null_values = null_values
         self.isdrop = False
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Check if the provided column need to be dropped.
 
@@ -40,10 +41,10 @@ class DropImputer:
             Provided data column.
         """
 
-        self.isdrop = True in col_df.map(self.check_isdrop).values
+        self.isdrop = any(self.check_isdrop(val) for val in col_df.tolist())
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Check the value of isdrop. If yes, then drop this column.
         If no, then return origin df.
@@ -56,9 +57,9 @@ class DropImputer:
 
         if not self.isdrop:
             return col_df
-        return from_pandas(pd.Series([]), npartitions=2)
+        return pd.Series([], dtype=col_df.dtype, name=col_df.name)
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Check if the provided column need to be dropped.
         If yes, then drop this column.
@@ -84,7 +85,4 @@ class DropImputer:
             Current value needs to be checked.
         """
 
-        if not self.null_values is None:
-            if val in self.null_values:
-                return True
-        return False
+        return in_null_values(val, self.null_values)

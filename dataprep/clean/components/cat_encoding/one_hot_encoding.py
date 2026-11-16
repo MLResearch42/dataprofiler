@@ -2,9 +2,12 @@
 Implement one-hot encoder.
 """
 
-from typing import Any, List
-import dask.dataframe as dd
+from typing import Any, Dict, List
+
 import numpy as np
+import pandas as pd
+
+from ...utils import is_missing
 
 
 class OneHotEncoder:
@@ -26,10 +29,11 @@ class OneHotEncoder:
         self.name = "OneHotEncoder"
         self.unique_list = np.zeros(1)
         self.unique_num = 0
+        self._positions: Dict[Any, int] = {}
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
-        Extract unique categorical values for one-hot encoder according to the provided column.
+        Extract the unique categories of the provided column.
 
         Parameters
         ----------
@@ -38,12 +42,13 @@ class OneHotEncoder:
         """
 
         self.unique_list = col_df.drop_duplicates().values
-        self.unique_num = col_df.drop_duplicates().count()
+        self.unique_num = len(self.unique_list)
+        self._positions = {self._key(val): pos for pos, val in enumerate(self.unique_list.tolist())}
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
-        Transform the provided data column with the extracted unique values.
+        Transform the provided data column with the extracted categories.
 
         Parameters
         ----------
@@ -54,10 +59,10 @@ class OneHotEncoder:
         result = col_df.map(self.compute_val)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
-        """
-        Extract unique categorical values for one-hot encoder according to the data column.
-        Transform the data column with the extracted unique values.
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
+        """ "
+        Extract the unique categories.
+        Transform the provided data column with the extracted categories.
 
         Parameters
         ----------
@@ -67,17 +72,26 @@ class OneHotEncoder:
 
         return self.fit(col_df).transform(col_df)
 
-    def compute_val(self, val: str) -> List[float]:
+    def compute_val(self, val: Any) -> List[float]:
         """
-        Compute one-hot encoding of provided value.
+        Compute the one-hot vector of a value. The vector has one entry for each
+        category seen by ``fit``. A category that was not seen by ``fit`` is
+        encoded as a vector of zeros.
 
         Parameters
         ----------
         val
             Value should be transferred to one-hot encoding.
         """
-        temp_result = np.zeros(len(self.unique_list))
-        idx = self.unique_list.tolist().index(val)
-        temp_result[idx] = 1
-        result: List[float] = temp_result.tolist()
+        result = [0.0] * self.unique_num
+        position = self._positions.get(self._key(val))
+        if position is not None:
+            result[position] = 1.0
         return result
+
+    @staticmethod
+    def _key(val: Any) -> Any:
+        """
+        Dictionary key of a category: all missing value markers are one category.
+        """
+        return None if is_missing(val) else val

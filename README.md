@@ -1,265 +1,273 @@
-<div align="center"><img width="100%" src="https://github.com/sfu-db/dataprep/raw/develop/assets/logo.png"/></div>
+# DataPrep (dataprep-next)
 
----
+**Fast exploratory data analysis and data cleaning for pandas, built for notebooks.**
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/pypi/l/dataprep?style=flat-square"/></a>
-  <a href="https://sfu-db.github.io/dataprep/"><img src="https://img.shields.io/badge/dynamic/json?color=blue&label=docs&prefix=v&query=%24.info.version&url=https%3A%2F%2Fpypi.org%2Fpypi%2Fdataprep%2Fjson&style=flat-square"/></a>
-  <a href="https://pypi.org/project/dataprep/"><img src="https://img.shields.io/pypi/pyversions/dataprep?style=flat-square"/></a>
-  <!-- <a href="https://www.codacy.com/gh/sfu-db/dataprep?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=sfu-db/dataprep&amp;utm_campaign=Badge_Coverage"><img src="https://app.codacy.com/project/badge/Coverage/ed658f08dcce4f088c850253475540ba"/></a> -->
-<!--   <a href="https://codecov.io/gh/sfu-db/dataprep"><img src="https://img.shields.io/codecov/c/github/sfu-db/dataprep?style=flat-square"/></a> -->
-  <!-- <a href="https://www.codacy.com/gh/sfu-db/dataprep?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=sfu-db/dataprep&amp;utm_campaign=Badge_Grade"><img src="https://app.codacy.com/project/badge/Grade/ed658f08dcce4f088c850253475540ba"/></a> -->
-</p>
+`dataprep-next` is a maintained continuation of [DataPrep](https://github.com/sfu-db/dataprep),
+whose last release was in 2024 and which no longer installs alongside current pandas, NumPy
+and bokeh. The import name is unchanged, so existing code keeps working:
 
-<p align="center">
-  <a href="https://sfu-db.github.io/dataprep/">Documentation</a>
-  | 
-  <a href="https://github.com/sfu-db/dataprep/discussions">Forum</a>
-</p>
+```python
+from dataprep.eda import plot, create_report
+from dataprep.clean import clean_email
+```
 
-<p align="center"><b>Low code data preparation</b></p>
-
-Currently, you can use DataPrep to:
-
-- Collect data from common data sources (through [`dataprep.connector`](#connector))
-- Do your exploratory data analysis (through [`dataprep.eda`](#eda))
-- Clean and standardize data (through [`dataprep.clean`](#clean))
-- ...more modules are coming
-
-## Releases
-
-<div align="center">
-  <table>
-    <tr>
-      <th>Repo</th>
-      <th>Version</th>
-      <th>Downloads</th>
-    </tr>
-    <tr>
-      <td>PyPI</td>
-      <td><a href="https://pypi.org/project/dataprep/"><img src="https://img.shields.io/pypi/v/dataprep?style=flat-square"/></a></td>
-      <td><a href="https://pepy.tech/project/dataprep"><img src="https://pepy.tech/badge/dataprep"/></a></td>
-    </tr>
-    <tr> 
-      <td>conda-forge</td>
-      <td><a href="https://anaconda.org/conda-forge/dataprep"><img src="https://img.shields.io/conda/vn/conda-forge/dataprep.svg"/></a></td>
-      <td><a href="https://anaconda.org/conda-forge/dataprep"><img src="https://img.shields.io/conda/dn/conda-forge/dataprep.svg"/></a></td>
-    </tr>
-  </table>
-</div>
+- **One line per question:** `plot(df)` gives an interactive overview of every column,
+  `create_report(df)` a full profiling report, `summarize(df)` the same statistics as a
+  DataFrame, and `plot(df, target="y")` the columns most associated with a target.
+- **Runs offline:** every plot and report is a single self-contained HTML document. Nothing is
+  fetched from the internet, so it works on closed networks with only a PyPI mirror.
+- **Works in VS Code notebooks** as well as Jupyter, JupyterLab, Colab and plain scripts.
+- **Fast:** 2-16x faster than the original on the benchmarks below.
+- **251 cleaning functions** for emails, phone numbers, dates, addresses, countries, URLs,
+  IP addresses, currencies, financial codes and national identifiers from 88 countries,
+  including US Social Security, employer and taxpayer numbers.
 
 ## Installation
 
+Requires Python 3.10 or newer.
+
 ```bash
-pip install -U dataprep
+pip install dataprep-next
 ```
 
-## EDA
+Optional extras:
 
-DataPrep.EDA is the fastest and the easiest EDA (Exploratory Data Analysis) tool in Python. It allows you to understand a Pandas/Dask DataFrame with a few lines of code in seconds.
+| Extra | Adds |
+|---|---|
+| `dataprep-next[dask]` | Dask DataFrames as input |
+| `dataprep-next[gui]` | `clean_df_gui()`, a point-and-click cleaning app (Flask) |
+| `dataprep-next[nlp]` | stemming and lemmatizing in word statistics and `clean_text` (NLTK) |
+| `dataprep-next[duplication]` | the interactive `clean_duplication()` tool |
+| `dataprep-next[notebook]` | widget progress bars in notebooks |
+| `dataprep-next[all]` | all of the above |
 
-#### Create Profile Reports, Fast
+### On a machine without internet access
 
-You can create a beautiful profile report from a Pandas/Dask DataFrame with the `create_report` function. DataPrep.EDA has the following advantages compared to other tools:
+If the machine can reach an internal PyPI mirror, `pip install dataprep-next` is all you need.
+To install from files instead, collect the wheels on a connected machine with the same
+operating system and Python version, copy the folder across, and install from it.
+`pip wheel` (rather than `pip download`) also builds a wheel for any dependency that is only
+published as source code, so the offline install needs no build tools:
 
-- **[10X Faster](https://arxiv.org/abs/2104.00841)**: DataPrep.EDA can be 10X faster than Pandas-based profiling tools due to its highly optimized Dask-based computing module.
-- **Interactive Visualization**: DataPrep.EDA generates interactive visualizations in a report, which makes the report look more appealing to end users.
-- **Big Data Support**: DataPrep.EDA naturally supports big data stored in a Dask cluster by accepting a Dask dataframe as input.
+```bash
+pip wheel "dataprep-next[all]" -w wheels/
+```
 
-The following code demonstrates how to use DataPrep.EDA to create a profile report for the titanic dataset.
+```bash
+pip install --no-index --find-links wheels/ "dataprep-next[all]"
+```
+
+Only two features use the network, and both are opt-in: currency conversion in
+`clean_currency(..., target_currency=...)`, which fetches exchange rates, and
+`set_bokeh_resources("cdn")`.
+
+## Exploratory data analysis
 
 ```python
 from dataprep.datasets import load_dataset
-from dataprep.eda import create_report
+from dataprep.eda import create_report, plot, plot_correlation, plot_diff, plot_missing
+
 df = load_dataset("titanic")
-create_report(df).show_browser()
+
+plot(df)                        # every column at a glance, with data-quality insights
+plot(df, "Age")                 # one column in depth: histogram, KDE, Q-Q, box plot, stats
+plot(df, "Age", "Sex")          # how two columns relate
+plot_correlation(df)            # Pearson, Spearman and Kendall correlation matrices
+plot_missing(df)                # where values are missing, and how they co-occur
+plot_diff([df[df.Survived == 1], df[df.Survived == 0]])  # compare 2-5 DataFrames
+create_report(df)               # all of the above in one report
 ```
 
-Click [here](https://docs.dataprep.ai/_downloads/1a61c6aebb3ecbe9dc9742bd6ca78ddb/titanic_dp.html) to see the generated report of the above code.
+With one datetime, one numerical and one categorical column, `plot(df, x, y, z)` draws the
+number aggregated per category over time, e.g. `plot(sales, "order_date", "revenue", "region")`.
 
-Click [here](https://docs.dataprep.ai/dev/bench/index.html) to see the benchmark result.
-
-#### Try DataPrep.EDA Online: [DataPrep.EDA Demo in Colab](https://colab.research.google.com/drive/1U_-pAMcne3hK1HbMB3kuEt-093Np_7Uk?usp=sharing)
-
-#### Innovative System Design
-
-DataPrep.EDA is the **_only_** task-centric EDA system in Python. It is carefully designed to improve usability.
-
-- **Task-Centric API Design**: You can declaratively specify a wide range of EDA tasks in different granularity with a single function call. All needed visualizations will be automatically and intelligently generated for you.
-- **Auto-Insights**: DataPrep.EDA automatically detects and highlights the insights (e.g., a column has many outliers) to facilitate pattern discovery about the data.
-- **How-to Guide**: A how-to guide is provided to show the configuration of each plot function. With this feature, you can easily customize the generated visualizations.
-
-#### Learn DataPrep.EDA in 2 minutes:
-
-<a href="https://youtu.be/nSkQy3ew3EI"><img src="assets/eda_video_cover.png"/></a>
-
-Click [here](https://sfu-db.github.io/dataprep/user_guide/eda/introduction.html) to check all the supported tasks.
-
-Check [plot](https://sfu-db.github.io/dataprep/user_guide/eda/plot.html), [plot_correlation](https://sfu-db.github.io/dataprep/user_guide/eda/plot_correlation.html), [plot_missing](https://sfu-db.github.io/dataprep/user_guide/eda/plot_missing.html) and [create_report](https://sfu-db.github.io/dataprep/user_guide/eda/create_report.html) to see how each function works.
-
-## Clean
-
-DataPrep.Clean contains about **140+** functions designed for cleaning and validating data in a DataFrame. It provides
-
-- **A Convenient GUI**: incorporated into Jupyter Notebook, users can clean their own DataFrame without any coding (see the video below).
-- **A Unified API**: each function follows the syntax `clean_{type}(df, 'column name')` (see an example below).
-- **Speed**: the computations are parallelized using Dask. It can clean **50K rows per second** on a dual-core laptop (that means cleaning 1 million rows in only 20 seconds).
-- **Transparency**: a report is generated that summarizes the alterations to the data that occured during cleaning.
-
-The following video shows how to use GUI of Dataprep.Clean
-<a href="https://youtu.be/WtJaVBIVoxQ"><img src="assets/clean_video_cover.png"/></a>
-
-The following example shows how to clean and standardize a column of country names.
+In a notebook the result displays when it is the last expression of a cell. Elsewhere, or to
+keep a result:
 
 ```python
-from dataprep.clean import clean_country
+report = create_report(df, title="Titanic")
+report.save("titanic.html")     # a standalone file you can e-mail or archive
+report.show_browser()           # open in the system browser
+plot(df, "Age").show()          # display now, e.g. inside a loop
+```
+
+Customize any chart with `config`, choose which charts to draw with `display`, and override
+the detected column types with `dtype`:
+
+```python
+plot(df, "Fare", config={"hist.bins": 20, "hist.yscale": "log"})
+plot(df, "Fare", display=["Histogram", "Box Plot"])
+plot(df, "Pclass", dtype={"Pclass": "nominal"})
+```
+
+Every chart has a **?** button that lists the `config` keys that change it.
+
+### Statistics as a DataFrame
+
+`summarize(df)` returns the statistics and data-quality insights behind `plot(df)` as a
+DataFrame with one row per column, for filtering, saving, comparing runs or checking in tests:
+
+```python
+from dataprep.eda import summarize
+
+summary = summarize(df)
+summary.loc[summary["missing_pct"] > 5, ["missing", "missing_pct"]]   # Age and Cabin
+summary.loc["Fare", ["mean", "median", "max", "insights"]]            # ... "Skewed"
+summary.attrs["dataset"]                                              # rows, duplicates, ...
+
+assert summary.loc["PassengerId", "distinct"] == len(df)              # e.g. in a pipeline test
+```
+
+The columns of a summary are always the same (count, missing, distinct, top value, mean,
+quantiles, skewness, zeros, text lengths, date range, insights, ...); statistics that do not
+apply to a column are NaN.
+
+### Which columns relate to a target?
+
+```python
+from dataprep.eda import rank_features
+
+plot(df, target="Survived")         # ranking chart and the distribution of the target
+rank_features(df, "Survived")       # the ranking as a DataFrame
+```
+
+Every column gets a score from 0 (no association) to 1 (determines the target): the Spearman
+correlation for two numerical columns, the correlation ratio for a numerical and a categorical
+column, and Cramér's V for two categorical columns. The last two are bias-corrected, so ID-like
+columns do not rank high by chance. Columns that look like identifiers, scores high enough to
+suggest target leakage, and imbalanced classes are flagged.
+
+### Large tables
+
+Every EDA function takes `sample=`, a number of rows or a fraction, and then works on a random
+sample of the rows. The sample is the same on every run and the output says that it shows a
+sample:
+
+```python
+create_report(big_df, sample=200_000)
+plot(big_df, "price", sample=0.1)
+```
+
+### Column types
+
+Each column is given a type that decides which statistics and charts it gets:
+
+| Type | Typical columns |
+|---|---|
+| Continuous | numbers with 10 or more distinct values |
+| SmallCardNum | numbers with fewer than 10 distinct values, plotted as categories |
+| Nominal | strings, booleans, `category`, mixed objects |
+| DateTime | `datetime64` columns, with or without a time zone |
+| GeoGraphy | strings that are mostly country names or codes, drawn on a world map |
+| GeoPoint | strings that are mostly `"latitude, longitude"` pairs |
+
+Data that is already in memory as pandas is used directly. Dask DataFrames (with the `dask`
+extra), Polars DataFrames, PyArrow tables and anything else with a `to_pandas()` method are
+converted to pandas first, so they need to fit in memory.
+
+## Data cleaning
+
+Every column cleaner takes a DataFrame and a column name and returns a new DataFrame with a
+`<column>_clean` column. The general-purpose cleaners (email, phone, date, country, URL, IP,
+address, coordinates, currency, column headers and `clean_df`) also print a short summary of
+what they changed:
+
+```python
 import pandas as pd
-df = pd.DataFrame({'country': ['USA', 'country: Canada', '233', ' tr ', 'NA']})
-df2 = clean_country(df, 'country')
-df2
-           country  country_clean
-0              USA  United States
-1  country: Canada         Canada
-2              233        Estonia
-3              tr          Turkey
-4               NA            NaN
+from dataprep.clean import clean_country, clean_email, clean_phone, validate_email
+
+df = pd.DataFrame({
+    "email": ["Jane.Doe@Example.COM", "not an email"],
+    "phone": ["555.234.5678", "(555) 234 5678 x99"],
+    "country": ["Canada", "DEU"],
+})
+
+df = clean_email(df, "email")                       # invalid values become NaN
+df = clean_phone(df, "phone", output_format="e164")
+df = clean_country(df, "country", output_format="alpha-2")
+validate_email(df["email"])                         # True / False per value
 ```
 
-Type validation is also supported:
+Options shared by the column cleaners: `inplace=True` replaces the column instead of adding
+one, `errors="ignore"` keeps unparseable values instead of setting them to NaN,
+`errors="raise"` stops at the first one, and `report=False` turns off the printed summary
+where there is one.
 
-```python
-from dataprep.clean import validate_country
-series = validate_country(df['country'])
-series
-0     True
-1    False
-2     True
-3     True
-4    False
-Name: country, dtype: bool
+| Area | Functions |
+|---|---|
+| Whole tables | `clean_df`, `clean_headers`, `clean_duplication`, `clean_ml`, `clean_df_gui` |
+| Text and contacts | `clean_text`, `clean_email`, `clean_phone`, `clean_url`, `clean_address` |
+| Places and time | `clean_country`, `clean_lat_long`, `clean_date` |
+| Technical values | `clean_ip`, `clean_json`, `clean_currency` |
+| Financial and product codes | `clean_iban`, `clean_bic`, `clean_isin`, `clean_cusip`, `clean_lei`, `clean_figi`, `clean_cfi`, `clean_isbn`, `clean_issn`, `clean_isrc`, `clean_isni`, `clean_ean`, `clean_gs1_128`, `clean_imei`, `clean_mac`, `clean_iso6346` (shipping containers), `clean_iso11649` (payment references), `clean_vatin`, ... |
+| National identifiers | 208 functions named `clean_<country code>_<identifier>` for 88 countries and the EU, e.g. `clean_us_ssn`, `clean_us_ein`, `clean_us_rtn`, `clean_ca_sin`, `clean_gb_nhs`, `clean_de_vat`, `clean_br_cpf`, `clean_in_gstin`, `clean_se_personnummer`, `clean_za_idnr`. |
+
+Every `clean_*` function has a matching `validate_*` function.
+
+`clean_df_gui(df)` starts a local cleaning app. In VS Code it opens in your browser; in Jupyter
+it is embedded in the cell output. The returned handle gives you the cleaned DataFrame
+(`gui.df`) and the Python code that reproduces your steps (`gui.code`).
+
+## Using DataPrep in VS Code
+
+Plots and reports work in the VS Code notebook editor and the interactive window with no
+extra setup:
+
+- Each output is drawn in its own frame, so several plots in one notebook do not interfere
+  with each other, and charts keep a white background on dark themes.
+- Frames resize to their content, and the mouse wheel scrolls the notebook even when the
+  pointer is over a chart.
+- Progress bars appear as plain text bars. Install the `notebook` extra for widget bars.
+
+Each output embeds the charting library (about 1.5 MB) so that it works offline and still
+renders when the notebook is reopened. If size matters more than offline use, call
+`dataprep.eda.set_bokeh_resources("cdn")` at the top of the notebook.
+
+## Performance
+
+Measured on an Apple M-series laptop, best of two runs, against the original DataPrep 0.4.6 on
+its own 2022 stack (pandas 1.5, dask 2022.12, bokeh 2.4):
+
+| Call | Original | dataprep-next |
+|---|---|---|
+| 81 columns x 1,460 rows: `plot(df)` | 5.2 s | 1.2 s |
+| 81 columns x 1,460 rows: `create_report(df)` | 12.0 s | 5.1 s |
+| 17 columns x 1,000,000 rows: `plot(df)` | 6.4 s | 1.0 s |
+| 17 columns x 1,000,000 rows: `plot_correlation(df)` | 10.8 s | 2.4 s |
+| 17 columns x 1,000,000 rows: `plot_missing(df)` | 3.7 s | 0.2 s |
+| 17 columns x 1,000,000 rows: `create_report(df)` | 17.4 s | 4.8 s |
+
+`import dataprep.clean` takes 0.02 s, down from 3.7 s. Per-column work runs on a thread pool;
+set its size with `dataprep.eda.set_num_workers(n)` or the `DATAPREP_NUM_WORKERS` environment
+variable. For tables with many millions of rows, `sample=` (see above) is the quickest way to
+a first look.
+
+## Changes from the original DataPrep
+
+- Works with Python 3.10-3.13, pandas 2.2-3.x, NumPy 1.26-2.x, bokeh 3.4+ and pydantic 2.
+- EDA computes with pandas and NumPy in memory instead of Dask, which made it both simpler and
+  faster. Dask is now an optional extra.
+- Removed: `dataprep.connector` (it downloaded API configurations from GitHub at run time),
+  `create_db_report` and `dataprep.lineage`.
+- Plots and reports no longer load anything from the internet (the original fetched a web font).
+- Plot outputs are isolated in frames, which fixes broken layouts when several plots share a
+  notebook and blank outputs in VS Code.
+- New: `summarize()`, target analysis (`plot(df, target=...)`, `rank_features()`), the
+  `sample=` option, and 81 more identifier cleaners, including the US ones.
+- Clearer error messages for empty data, unknown columns and unsupported column combinations.
+- Many bug fixes; see [CHANGELOG.md](CHANGELOG.md).
+
+## Development
+
+```bash
+git clone https://github.com/MLResearch42/dataprofiler.git
+cd dataprofiler
+uv venv && uv pip install -e ".[dev]"
+pytest -n auto
 ```
 
-Check [Documentation of Dataprep.Clean](https://docs.dataprep.ai/user_guide/clean/introduction.html) to see how each function works.
+## License and credits
 
-## Connector
-
-Connector now supports loading data from both web API and databases.
-
-### Web API
-
-Connector is an intuitive, open-source API wrapper that speeds up development by standardizing calls to multiple APIs as a simple workflow.
-
-Connector provides a simple wrapper to collect structured data from different Web APIs (e.g., Twitter, Spotify), making web data collection easy and efficient, without requiring advanced programming skills.
-
-Do you want to leverage the growing number of websites that are opening their data through public APIs? Connector is for you!
-
-Let's check out the several benefits that Connector offers:
-
-- **A unified API:** You can fetch data using one or two lines of code to get data from [tens of popular websites](https://github.com/sfu-db/DataConnectorConfigs).
-- **Auto Pagination:** Do you want to invoke a Web API that could return a large result set and need to handle it through pagination? Connector automatically does the pagination for you! Just specify the desired number of returned results (argument `_count`) without getting into unnecessary detail about a specific pagination scheme.
-- **Speed:** Do you want to fetch results more quickly by making concurrent requests to Web APIs? Through the `_concurrency` argument, Connector simplifies concurrency, issuing API requests in parallel while respecting the API's rate limit policy.
-
-#### How to fetch all publications of Andrew Y. Ng?
-
-```python
-from dataprep.connector import connect
-conn_dblp = connect("dblp", _concurrency = 5)
-df = await conn_dblp.query("publication", author = "Andrew Y. Ng", _count = 2000)
-```
-
-Here, you can find detailed [Examples.](https://github.com/sfu-db/dataprep/tree/develop/examples)
-
-Connector is designed to be easy to extend. If you want to connect with your own web API, you just have to write a simple [configuration file](https://github.com/sfu-db/DataConnectorConfigs/blob/develop/CONTRIBUTING.md#add-configuration-files) to support it. This configuration file describes the API's main attributes like the URL, query parameters, authorization method, pagination properties, etc.
-
-### Database
-
-Connector now has adopted [connectorx](https://github.com/sfu-db/connector-x) in order to enable loading data from databases (Postgres, Mysql, SQLServer, etc.) into Python dataframes (pandas, dask, modin, arrow, polars) in the fastest and most memory efficient way. [[Benchmark]](https://github.com/sfu-db/connector-x/blob/main/Benchmark.md#benchmark-result-on-aws-r54xlarge)
-
-What you need to do is just install `connectorx` (`pip install -U connectorx`) and run one line of code:
-
-```python
-from dataprep.connector import read_sql
-read_sql("postgresql://username:password@server:port/database", "SELECT * FROM lineitem")
-```
-
-Check out [here](https://github.com/sfu-db/connector-x#supported-sources--destinations) for supported databases and dataframes and more examples usages.
-
-
-## Lineage
-A Column Level Lineage Graph for SQL. This tool is intended to help you by creating an interactive graph on a webpage to explore the column level lineage among them.
-
-### The lineage module offers:
-A general introduction of the project can be found in this [blog post](https://medium.com/@shz1/lineagex-the-python-library-for-your-lineage-needs-5e51b77a0032).
-- **Automatic dependency creation**: When there are dependency among the SQL files, and those tables are not yet in the database, the lineage module will automatically tries to find the dependency table and creates it.
-- **Clean and simple but very interactive user interface**: The user interface is very simple to use with minimal clutters on the page while showing all of the necessary information.
-- **Variety of SQL statements**: The lineage module supports a variety of SQL statements, aside from the typical `SELECT` statement, it also supports `CREATE TABLE/VIEW [IF NOT EXISTS]` statement as well as the `INSERT` and `DELETE` statement.
-- **[dbt](https://docs.getdbt.com/) support**: The lineage module is also implemented in the [dbt-LineageX](https://github.com/sfu-db/dbt-lineagex), it is added into a dbt project and by using the dbt library [fal](https://github.com/fal-ai/fal), it is able to reuse the Python core and create the similar output from the dbt project.
-
-### Uses and Demo
-The interactive graph looks like this: 
-<img src="https://raw.githubusercontent.com/sfu-db/lineagex/main/docs/example.gif"/>
-Here is a [live demo](https://zshandy.github.io/lineagex-demo/) with the [mimic-iv concepts_postgres](https://github.com/MIT-LCP/mimic-code/tree/main/mimic-iv/concepts_postgres) files([navigation instructions](https://sfu-db.github.io/lineagex/output.html#how-to-navigate-the-webpage)) and that is created with one line of code:
-```python
-from dataprep.lineage import lineagex
-lineagex(sql=path/to/sql, target_schema="schema1", conn_string="postgresql://username:password@server:port/database", search_path_schema="schema1, public")
-```
-Check out more detailed usage and examples [here](https://sfu-db.github.io/lineagex/intro.html). 
-
-## Documentation
-
-The following documentation can give you an impression of what DataPrep can do:
-
-- [Connector](https://docs.dataprep.ai/user_guide/connector/introduction.html)
-- [EDA](https://docs.dataprep.ai/user_guide/eda/introduction.html)
-- [Clean](https://docs.dataprep.ai/user_guide/clean/introduction.html)
-- [Lineage](https://sfu-db.github.io/lineagex/intro.html)
-- 
-## Contribute
-
-There are many ways to contribute to DataPrep.
-
-- Submit bugs and help us verify fixes as they are checked in.
-- Review the source code changes.
-- Engage with other DataPrep users and developers on StackOverflow.
-- Ask questions & propose new ideas in our [Forum].
-- [![Twitter]](https://twitter.com/dataprepai)
-- Contribute bug fixes.
-- Providing use cases and writing down your user experience.
-
-Please take a look at our [wiki] for development documentations!
-
-[build status]: https://img.shields.io/circleci/build/github/sfu-db/dataprep/master?style=flat-square&token=f68e38757f5c98771f46d1c7e700f285a0b9784d
-[forum]: https://github.com/sfu-db/dataprep/discussions
-[wiki]: https://github.com/sfu-db/dataprep/wiki
-[examples]: https://github.com/sfu-db/dataprep/tree/master/examples
-[twitter]: https://img.shields.io/twitter/follow/dataprepai?style=social
-
-## Acknowledgement
-
-Some functionalities of DataPrep are inspired by the following packages.
-
-- [Pandas Profiling](https://github.com/pandas-profiling/pandas-profiling)
-
-  Inspired the report functionality and insights provided in `dataprep.eda`.
-
-- [missingno](https://github.com/ResidentMario/missingno)
-
-  Inspired the missing value analysis in `dataprep.eda`.
-
-## Citing DataPrep
-
-If you use DataPrep, please consider citing the following paper:
-
-Jinglin Peng, Weiyuan Wu, Brandon Lockhart, Song Bian, Jing Nathan Yan, Linghao Xu, Zhixuan Chi, Jeffrey M. Rzeszotarski, and Jiannan Wang. [DataPrep.EDA: Task-Centric Exploratory Data Analysis for Statistical
-Modeling in Python.](https://arxiv.org/abs/2104.00841) _SIGMOD 2021_.
-
-BibTeX entry:
-
-```bibtex
-@inproceedings{dataprepeda2021,
-  author    = {Jinglin Peng and Weiyuan Wu and Brandon Lockhart and Song Bian and Jing Nathan Yan and Linghao Xu and Zhixuan Chi and Jeffrey M. Rzeszotarski and Jiannan Wang},
-  title     = {DataPrep.EDA: Task-Centric Exploratory Data Analysis for Statistical Modeling in Python},
-  booktitle = {Proceedings of the 2021 International Conference on Management of Data (SIGMOD '21), June 20--25, 2021, Virtual Event, China},
-  year      = {2021}
-}
-```
+MIT licensed. DataPrep was created by the
+[SFU Database Systems Lab](https://github.com/sfu-db); this fork keeps their copyright notice
+and builds on their work.

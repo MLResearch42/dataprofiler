@@ -13,18 +13,19 @@ from bokeh.models import (
     ColorBar,
     ColumnDataSource,
     CustomJS,
+    CustomJSTickFormatter,
     FactorRange,
-    FuncTickFormatter,
     HoverTool,
     Legend,
     LegendItem,
     LinearColorMapper,
     PrintfTickFormatter,
     Select,
+    TabPanel,
+    Tabs,
 )
 from bokeh.models.annotations import Title
-from bokeh.models.widgets import Panel, Tabs
-from bokeh.plotting import Figure, figure
+from bokeh.plotting import figure
 
 from ..configs import Config
 from ..intermediate import Intermediate
@@ -48,7 +49,7 @@ def render_correlation(itmdt: Intermediate, cfg: Config) -> Any:
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
     if itmdt.visual_type is None:
-        visual_elem = Figure()
+        visual_elem = figure()
     elif itmdt.visual_type == "correlation_impact":
         visual_elem = render_correlation_impact(itmdt, plot_width, plot_height, cfg)
     elif itmdt.visual_type == "correlation_heatmaps":
@@ -65,7 +66,7 @@ def render_correlation(itmdt: Intermediate, cfg: Config) -> Any:
     return visual_elem
 
 
-# def _vis_cross_table(intermediate: Intermediate, params: Dict[str, Any]) -> Figure:
+# def _vis_cross_table(intermediate: Intermediate, params: Dict[str, Any]) -> figure:
 #     """
 #     :param intermediate: An object to encapsulate the
 #     intermediate results.
@@ -96,7 +97,7 @@ def render_correlation(itmdt: Intermediate, cfg: Config) -> Any:
 
 
 ########## HeatMaps ##########
-def tweak_figure(fig: Figure) -> None:
+def tweak_figure(fig: figure) -> None:
     """
     Set some common attributes for a figure
     """
@@ -111,8 +112,8 @@ def tweak_figure(fig: Figure) -> None:
         if (tick.length > 15) return tick.substring(0, 13) + '...';
         else return tick;
     """
-    fig.xaxis.formatter = FuncTickFormatter(code=format_js)
-    fig.yaxis.formatter = FuncTickFormatter(code=format_js)
+    fig.xaxis.formatter = CustomJSTickFormatter(code=format_js)
+    fig.yaxis.formatter = CustomJSTickFormatter(code=format_js)
 
 
 def render_correlation_impact(
@@ -121,7 +122,7 @@ def render_correlation_impact(
     """
     Render correlation heatmaps in to tabs
     """
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     tooltips = [("x", "@x"), ("y", "@y"), ("correlation", "@correlation{1.11}")]
 
     for method, df in itmdt["data"].items():
@@ -133,11 +134,11 @@ def render_correlation_impact(
         mapper, color_bar = create_color_mapper(RDBU)
         x_range = FactorRange(*itmdt["axis_range"])
         y_range = FactorRange(*reversed(itmdt["axis_range"]))
-        fig = Figure(
+        fig = figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             x_axis_location="below",
             tools="hover",
             toolbar_location=None,
@@ -159,7 +160,7 @@ def render_correlation_impact(
         )
         fig.frame_width = plot_width
         fig.add_layout(color_bar, "left")
-        tab = Panel(child=fig, title=method)
+        tab = TabPanel(child=fig, title=method)
         tabs.append(tab)
 
     return {
@@ -192,7 +193,7 @@ def render_correlation_heatmaps(itmdt: Intermediate, plot_width: int, plot_heigh
     """
     Render correlation heatmaps in to tabs
     """
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     tooltips = [("x", "@x"), ("y", "@y"), ("correlation", "@correlation{1.11}")]
     axis_range = itmdt["axis_range"]
 
@@ -205,11 +206,11 @@ def render_correlation_heatmaps(itmdt: Intermediate, plot_width: int, plot_heigh
         mapper, color_bar = create_color_mapper(RDBU)
         x_range = FactorRange(*axis_range)
         y_range = FactorRange(*reversed(axis_range))
-        fig = Figure(
+        fig = figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             x_axis_location="below",
             tools="hover",
             toolbar_location=None,
@@ -230,7 +231,7 @@ def render_correlation_heatmaps(itmdt: Intermediate, plot_width: int, plot_heigh
         )
 
         fig.add_layout(color_bar, "right")
-        tab = Panel(child=fig, title=method)
+        tab = TabPanel(child=fig, title=method)
         tabs.append(tab)
 
     tabs = Tabs(tabs=tabs)
@@ -243,7 +244,7 @@ def render_correlation_single_heatmaps(
     """
     Render correlation heatmaps, but with single column
     """
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     tooltips = [("y", "@y"), ("correlation", "@correlation{1.11}")]
 
     for method, df in itmdt["data"].items():
@@ -254,8 +255,8 @@ def render_correlation_single_heatmaps(
         fig = figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             x_axis_location="below",
             tools="hover",
             toolbar_location=None,
@@ -276,7 +277,7 @@ def render_correlation_single_heatmaps(
         )
 
         fig.add_layout(color_bar, "right")
-        tab = Panel(child=fig, title=method)
+        tab = TabPanel(child=fig, title=method)
         tabs.append(tab)
 
     return {
@@ -320,9 +321,9 @@ def render_scatter(
 
     tooltips = [(xcol, f"@{{{xcol}}}"), (ycol, f"@{{{ycol}}}")]
 
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         toolbar_location=None,
         tools=[],
         x_axis_label=xcol,
@@ -404,9 +405,9 @@ def render_crossfilter(
     ycol = source_xy_value.data["y"][0]
 
     tooltips = [("X-Axis: ", "@__x__"), ("Y-Axis: ", "@__y__")]
-    scatter_fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    scatter_fig = figure(
+        width=plot_width,
+        height=plot_height,
         toolbar_location=None,
         title=Title(text="Scatter Plot", align="center"),
         tools=[],
@@ -453,7 +454,7 @@ def render_crossfilter(
             scatter.change.emit();
             children.push(scatter_plot)
         }
-        fig_all_in_one.children = children;        
+        fig_all_in_one.children = children;
         """,
         ),
     )
@@ -487,7 +488,7 @@ def render_crossfilter(
             scatter.change.emit();
             children.push(scatter_plot)
         }
-        fig_all_in_one.children = children;        
+        fig_all_in_one.children = children;
         """,
         ),
     )
@@ -519,7 +520,7 @@ def render_crossfilter(
 
 #     tooltips = [("X-Axis: ", "@__x__"), ("Y-Axis: ", "@__y__")]
 
-#     fig = Figure(
+#     fig = figure(
 #         plot_width=plot_width,
 #         plot_height=plot_height,
 #         toolbar_location=None,

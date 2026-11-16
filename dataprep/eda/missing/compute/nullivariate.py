@@ -2,13 +2,11 @@
 calculating intermediate part
 """
 
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+import warnings
+from typing import Any, Dict, Generator, List, Tuple
 
-import dask.array as da
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-from dask import delayed
 from scipy.cluster import hierarchy
 
 from ...configs import Config
@@ -29,10 +27,13 @@ def _compute_missing_nullivariate(df: EDAFrame, cfg: Config) -> Generator[Any, A
     null_cnts = nullity.sum(axis=0)
     nrows = df.shape[0]
     ncols = df.shape[1]
+    if nrows == 0 or ncols == 0:
+        raise ValueError("plot_missing needs a DataFrame with at least one row and one column.")
+    total_nulls = int(null_cnts.sum())
     null_perc = null_cnts / nrows
-    miss_perc = nullity.sum() / (nrows * ncols)
-    avg_row = nullity.sum() / nrows
-    avg_col = nullity.sum() / ncols
+    miss_perc = total_nulls / (nrows * ncols)
+    avg_row = total_nulls / nrows
+    avg_col = total_nulls / ncols
 
     tasks = (
         missing_spectrum(df, cfg.spectrum.bins) if cfg.spectrum.enable else None,
@@ -41,7 +42,7 @@ def _compute_missing_nullivariate(df: EDAFrame, cfg: Config) -> Generator[Any, A
         missing_heatmap(df) if cfg.heatmap.enable else None,
         # dendrogram cannot be computed for single column dataframe
         missing_dendrogram(df) if cfg.dendro.enable and ncols > 1 else None,
-        nullity.sum() if cfg.stats.enable else None,
+        total_nulls if cfg.stats.enable else None,
         missing_col_cnt(df) if cfg.stats.enable else None,
         missing_row_cnt(df) if cfg.stats.enable else None,
         missing_most_col(df) if cfg.insight.enable else None,
@@ -70,15 +71,9 @@ def _compute_missing_nullivariate(df: EDAFrame, cfg: Config) -> Generator[Any, A
     ### Eager Region Begin
     if cfg.heatmap.enable:
         sel = ~((null_perc == 0) | (null_perc == 1))
-        if nrows != 1:
-            # heatmap is nan when dataframe has only one column so that generate error.
-            # To solve the problem, we create a 2d array here
-            heatmap = np.empty([ncols, ncols]) if not isinstance(heatmap, np.ndarray) else heatmap
-            heatmap = pd.DataFrame(
-                data=heatmap[:, sel][sel, :], columns=df.columns[sel], index=df.columns[sel]
-            )
-        else:
-            heatmap = pd.DataFrame(data=heatmap, columns=df.columns[sel], index=df.columns[sel])
+        heatmap = pd.DataFrame(
+            data=heatmap[:, sel][sel, :], columns=df.columns[sel], index=df.columns[sel]
+        )
 
     if cfg.stats.enable:
         missing_stat = {
@@ -147,142 +142,95 @@ def _compute_missing_nullivariate(df: EDAFrame, cfg: Config) -> Generator[Any, A
 compute_missing_nullivariate = staged(_compute_missing_nullivariate)  # pylint: disable=invalid-name
 
 
-def missing_perc_blockwise(bin_size: int) -> Callable[[np.ndarray], np.ndarray]:
-    """Compute the missing percentage in a block."""
-
-    def imp(block: np.ndarray) -> np.ndarray:
-        nbins = block.shape[0] // bin_size
-
-        sep = nbins * bin_size
-        block1 = block[:sep].reshape((bin_size, nbins, *block.shape[1:]))
-        ret = block1.sum(axis=0) / bin_size
-
-        # remaining data that cannot be fit into a single bin
-        if block.shape[0] != sep:
-            ret_remainder = block[sep:].sum(axis=0, keepdims=True) / (block.shape[0] - sep)
-            ret = np.concatenate([ret, ret_remainder], axis=0)
-
-        return ret
-
-    return imp
+# The dendrogram compares every pair of columns over all rows. On long tables it
+# is built from a random sample of this many rows.
+DENDROGRAM_MAX_ROWS = 100_000
 
 
-def missing_spectrum(
-    df: EDAFrame, bins: int
-) -> Dict[str, da.Array]:  # pylint: disable=too-many-locals
-    """Calculate a missing spectrum for each column."""
+def missing_spectrum(df: EDAFrame, bins: int) -> Dict[str, np.ndarray]:
+    """Calculate a missing spectrum for each column.
+
+    The rows are cut into (at most) ``bins`` consecutive blocks and the share of
+    missing values is computed per block and column.
+    """
 
     nrows, ncols = df.shape
     data = df.nulls
 
-    if nrows > 1:
-        num_bins = min(bins, nrows - 1)
-        bin_size = nrows // num_bins
-        chunk_size = min(
-            1024 * 1024 * 128, nrows * ncols
-        )  # max 1024 x 1024 x 128 Bytes bool values
-        nbins_per_chunk = max(chunk_size // (bin_size * data.shape[1]), 1)
-        chunk_size = nbins_per_chunk * bin_size
-        data = data.rechunk((chunk_size, None))
-        sep = nrows // chunk_size * chunk_size
-    else:
-        # avoid division or module by zero
-        bin_size = 1
-        nbins_per_chunk = 1
-        chunk_size = 1
-        data = data.rechunk((chunk_size, None))
-        sep = 1
+    num_bins = max(min(bins, nrows - 1), 1)
+    bin_size = max(nrows // num_bins, 1)
 
-    spectrum_missing_percs = data[:sep].map_blocks(
-        missing_perc_blockwise(bin_size),
-        chunks=(nbins_per_chunk, *data.chunksize[1:]),
-        dtype=float,
-    )
-
-    # calculation for the last chunk
-    if sep != nrows:
-        spectrum_missing_percs_remain = data[sep:].map_blocks(
-            missing_perc_blockwise(bin_size),
-            chunks=(int(np.ceil((nrows - sep) / bin_size)), *data.shape[1:]),
-            dtype=float,
-        )
-        spectrum_missing_percs = da.concatenate(
-            [spectrum_missing_percs, spectrum_missing_percs_remain], axis=0
-        )
-
-    num_bins = spectrum_missing_percs.shape[0]
-
-    locs0 = da.arange(num_bins) * bin_size
-    locs1 = da.minimum(locs0 + bin_size, nrows)
+    locs0 = np.arange(0, nrows, bin_size)
+    locs1 = np.minimum(locs0 + bin_size, nrows)
     locs_middle = locs0 + bin_size / 2
+    num_bins = len(locs0)
+
+    # share of missing values per block: (num_bins, ncols)
+    sums = np.add.reduceat(data.astype(np.int64), locs0, axis=0)
+    rates = sums / (locs1 - locs0)[:, None]
 
     return {
-        "column": da.repeat(da.from_array(df.columns.values, (1,)), num_bins),
-        "location": da.tile(locs_middle, ncols),
-        "missing_rate": spectrum_missing_percs.T.ravel().rechunk(locs_middle.shape[0]),
-        "loc_start": da.tile(locs0, ncols),
-        "loc_end": da.tile(locs1, ncols),
+        "column": np.repeat(np.asarray(df.columns.values, dtype=object), num_bins),
+        "location": np.tile(locs_middle, ncols),
+        "missing_rate": rates.T.ravel(),
+        "loc_start": np.tile(locs0, ncols),
+        "loc_end": np.tile(locs1, ncols),
     }
 
 
 def missing_bars(
-    null_cnts: da.Array, cols: np.ndarray, nrows: dd.core.Scalar
+    null_cnts: np.ndarray, cols: np.ndarray, nrows: int
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Calculate a bar chart visualization of nullity correlation
     in the given DataFrame."""
     return nrows - null_cnts, null_cnts, cols
 
 
-def missing_heatmap(df: EDAFrame) -> Optional[pd.DataFrame]:
+def missing_heatmap(df: EDAFrame) -> np.ndarray:
     """Calculate a heatmap visualization of nullity correlation
     in the given DataFrame."""
-
-    return da.corrcoef(df.nulls, rowvar=False)
+    nulls = df.nulls
+    if nulls.shape[1] < 2 or nulls.shape[0] < 2:
+        return np.full((nulls.shape[1], nulls.shape[1]), np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.atleast_2d(np.corrcoef(nulls.astype(np.float32), rowvar=False))
 
 
 def missing_dendrogram(df: EDAFrame) -> Any:
     """Calculate a missing values dendrogram."""
-    # Link the hierarchical output matrix, figure out orientation, construct base dendrogram.
-    linkage_matrix = delayed(hierarchy.linkage)(df.nulls.T, "average")
-
-    dendrogram = delayed(hierarchy.dendrogram)(
-        Z=linkage_matrix,
-        orientation="bottom",
-        labels=df.columns,
-        distance_sort="descending",
-        no_plot=True,
-    )
+    nulls = df.nulls
+    if nulls.shape[0] > DENDROGRAM_MAX_ROWS:
+        rows = np.random.default_rng(0).choice(nulls.shape[0], DENDROGRAM_MAX_ROWS, replace=False)
+        nulls = nulls[np.sort(rows)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", hierarchy.ClusterWarning)
+        # Link the hierarchical output matrix, figure out orientation, construct base dendrogram.
+        linkage_matrix = hierarchy.linkage(nulls.T, "average")
+        dendrogram = hierarchy.dendrogram(
+            Z=linkage_matrix,
+            orientation="bottom",
+            labels=list(df.columns),
+            distance_sort="descending",
+            no_plot=True,
+        )
 
     return dendrogram
 
 
-def missing_col_cnt(df: EDAFrame) -> Any:
+def missing_col_cnt(df: EDAFrame) -> int:
     """Calculate how many columns contain missing values."""
-    nulls = df.nulls
-    rst = nulls.sum(0)
-    rst = rst[rst > 0]
-
-    return (rst > 0).sum()
+    return int(df.nulls.any(axis=0).sum())
 
 
-def missing_row_cnt(df: EDAFrame) -> Any:
+def missing_row_cnt(df: EDAFrame) -> int:
     """Calculate how many rows contain missing values."""
-    nulls = df.nulls
-    rst = nulls.sum(1)
-    rst = rst[rst > 0]
-
-    return (rst > 0).sum()
+    return int(df.nulls.any(axis=1).sum())
 
 
 def missing_most_col(df: EDAFrame) -> Tuple[int, float, List[Any]]:
     """Find which column has the most number of missing values.
 
-    Parameters
-    ----------
-    df
-        the DataArray data_frame
-
-    Outputs
+    Returns
     -------
     cnt
         the count of columns having the most missing values
@@ -291,25 +239,18 @@ def missing_most_col(df: EDAFrame) -> Tuple[int, float, List[Any]]:
     rst
         a list of column indices with highest missing rate
     """
-    nulls = df.nulls
-    col_sum = nulls.sum(axis=0)
+    col_sum = df.nulls.sum(axis=0)
     maximum = col_sum.max()
     rate = maximum / df.shape[0]
-    cnt = (col_sum == maximum).sum()
-    rst = da.where(col_sum == maximum)[0]
+    rst = np.where(col_sum == maximum)[0]
 
-    return cnt, rate, rst
+    return int(len(rst)), float(rate), rst
 
 
 def missing_most_row(df: EDAFrame) -> Tuple[int, float, List[Any]]:
     """Find which row has the most number of missing values.
 
-    Parameters
-    ----------
-    df
-        the DataArray data_frame
-
-    Outputs
+    Returns
     -------
     cnt
         the count of rows having the most missing values
@@ -318,11 +259,9 @@ def missing_most_row(df: EDAFrame) -> Tuple[int, float, List[Any]]:
     rst
         a list of row indices with highest missing rate
     """
-    nulls = df.nulls
-    row_sum = nulls.sum(axis=1)
+    row_sum = df.nulls.sum(axis=1)
     maximum = row_sum.max()
     rate = maximum / df.shape[1]
-    cnt = (row_sum == maximum).sum()
-    rst = da.where(row_sum == maximum)[0]
+    rst = np.where(row_sum == maximum)[0]
 
-    return cnt, rate, rst
+    return int(len(rst)), float(rate), rst

@@ -2,10 +2,10 @@
 Initialize dictionary of numerical imputers.
 """
 
+from .drop_imputer import DropImputer
 from .mean_imputer import MeanImputer
 from .median_imputer import MedianImputer
 from .most_frequent_imputer import MostFrequentImputer
-from .drop_imputer import DropImputer
 
 operator_dic = {
     "mean": MeanImputer,

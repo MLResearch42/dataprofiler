@@ -1,14 +1,15 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 
 <head>
-    <title> {{ context.title }} </title>
-    {% include 'jquery.html' %}
-    {% include 'pagination.html' %}
+    {% include 'frame.html' %}
+    <title>{{ context.title|e }}</title>
     {% include 'grid_scripts.html' %}
     {% include 'grid_styles.html' %}
 </head>
 
 <body>
+    {% include 'sample_note.html' %}
     {% if context.tabledata or context.overview_insights or context.comparison_stats %}
     <div class="top-info-{{ context.rnd }}">
         <input type='checkbox' style='display: none' id="tb-{{ context.rnd }}">

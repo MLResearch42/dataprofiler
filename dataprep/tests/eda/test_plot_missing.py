@@ -7,12 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ...eda.dtypes_v2 import Numerical
-from ...eda.missing import compute_missing, render_missing, plot_missing
-from ...eda.utils import to_dask
-from ...eda.configs import Config
 from ...datasets import load_dataset
-from .random_data_generator import random_df
+from ...eda.configs import Config
+from ...eda.dtypes_v2 import Numerical
+from ...eda.missing import compute_missing, plot_missing, render_missing
+from ...eda.utils import to_dask
 
 
 @pytest.fixture(scope="module")  # type: ignore
@@ -102,10 +101,10 @@ def test_specify_column_type(simpledf: dd.DataFrame) -> None:
     render_missing(itmdt, cfg)
 
 
-@pytest.mark.xfail  # type: ignore
 def test_sanity_compute_6(simpledf: dd.DataFrame) -> None:
     cfg = Config.from_dict()
-    compute_missing(simpledf, col2="b", cfg=cfg)
+    with pytest.raises(ValueError, match="x cannot be None"):
+        compute_missing(simpledf, col2="b", cfg=cfg)
 
 
 def test_sanity_compute_7() -> None:

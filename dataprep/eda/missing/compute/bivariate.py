@@ -3,16 +3,16 @@ calculating intermediate part."""
 
 from typing import Any, Generator, List
 
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 from scipy.stats import rv_histogram
 
 from ...configs import Config
+from ...dtypes import Continuous, DateTime, GeoGraphy, GeoPoint, Nominal, SmallCardNum
 from ...eda_frame import EDAFrame
-from ...dtypes_v2 import Continuous, Nominal, GeoGraphy, SmallCardNum, DateTime
 from ...intermediate import ColumnsMetadata, Intermediate
 from ...staged import staged
+from ...utils import finite
 from .common import LABELS, histogram
 
 
@@ -25,35 +25,43 @@ def _compute_missing_bivariate(  # pylint: disable=too-many-locals,too-many-stat
     """Calculate the distribution change on another column y when
     the missing values in x is dropped."""
 
+    for col in (x, y):
+        if col not in df.columns:
+            raise ValueError(f"Column {col!r} not found. Available columns: {list(df.columns)}")
+
     y_dtype = df.get_eda_dtype(y)
-    # dataframe with all rows where column x is null removed
-    ddf = df.frame[~df.frame[x].isna()]
-    if isinstance(y_dtype, (SmallCardNum, DateTime)):
-        col0 = df.frame[y].dropna().astype(str).values  # series from original dataframe
-        col1 = ddf[y].dropna().astype(str).values  # series with null rows from col x removed
-    elif isinstance(y_dtype, (GeoGraphy, Nominal, Continuous)):
-        # Geograph, Nominal should be transformed to str when constructing edaframe.
-        # Here we do not need to transform them again.
-        col0 = df.frame[y].dropna().values
-        col1 = ddf[y].dropna().values
+    categorical = isinstance(y_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime))
+    # rows where column x is present
+    present = ~df.frame[x].isna().to_numpy()
+    if categorical:
+        full = df.get_col_as_str(y)
+    elif isinstance(y_dtype, Continuous):
+        full = finite(df.frame[y])
+        present = present[full.index.to_numpy()]
     else:
         raise ValueError(f"unprocessed type:{y_dtype}")
 
-    minimum, maximum = col0.min(), col0.max()
-    bins = (
-        cfg.bar.bars
-        if isinstance(y_dtype, (Nominal, GeoGraphy, SmallCardNum, DateTime))
-        else cfg.hist.bins
-    )
+    srs0 = full.dropna()  # series from original dataframe
+    srs1 = full[present].dropna()  # series with null rows from col x removed
+    col0, col1 = srs0.to_numpy(), srs1.to_numpy()
 
+    if isinstance(y_dtype, Continuous) and len(col0):
+        minimum, maximum = col0.min(), col0.max()
+    else:
+        minimum, maximum = np.nan, np.nan
+    bins = cfg.bar.bars if categorical else cfg.hist.bins
+
+    rng = (minimum, maximum) if isinstance(y_dtype, Continuous) and len(col0) else None
     hists = [
-        histogram(col, eda_dtype=y_dtype, bins=bins, return_edges=True) for col in [col0, col1]
+        histogram(col, eda_dtype=y_dtype, bins=bins, return_edges=True, range=rng)
+        for col in [col0, col1]
     ]
 
     quantiles = None
     if isinstance(y_dtype, Continuous) and cfg.box.enable:
         quantiles = [
-            dd.from_dask_array(col).quantile([0, 0.25, 0.5, 0.75, 1]) for col in [col0, col1]
+            np.quantile(col, [0, 0.25, 0.5, 0.75, 1]) if len(col) else np.full(5, np.nan)
+            for col in [col0, col1]
         ]
 
     ### Lazy Region Finished
@@ -109,7 +117,7 @@ def _compute_missing_bivariate(  # pylint: disable=too-many-locals,too-many-stat
 
             iqr = boxdf["q3"] - boxdf["q1"]
             boxdf["upper"] = np.minimum(boxdf["q3"] + 1.5 * iqr, boxdf["max"])
-            boxdf["lower"] = np.maximum(boxdf["q3"] - 1.5 * iqr, boxdf["min"])
+            boxdf["lower"] = np.maximum(boxdf["q1"] - 1.5 * iqr, boxdf["min"])
             boxdf["label"] = LABELS
 
         itmdt = Intermediate(

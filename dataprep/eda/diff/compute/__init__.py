@@ -1,21 +1,20 @@
 """Computations for plot_diff([df...])."""
 
-from typing import Optional, Union, List, Dict, Any
-import dask.dataframe as dd
-import pandas as pd
+from typing import Any, Dict, List, Optional, Union
+
 from ....errors import DataprepError
-from ...intermediate import Intermediate
-from ...utils import to_dask
-from ...dtypes import DTypeDef
 from ...configs import Config
-from .multiple_df import compare_multiple_df  # type: ignore
-from .multiple_column import compare_multiple_col  # type: ignore
+from ...dtypes import DTypeDef
+from ...eda_frame import DataFrame, to_pandas
+from ...intermediate import Intermediate
+from .multiple_column import compare_multiple_col
+from .multiple_df import compare_multiple_df
 
 __all__ = ["compute_diff"]
 
 
 def compute_diff(
-    df: Union[List[Union[pd.DataFrame, dd.DataFrame]], Union[pd.DataFrame, dd.DataFrame]],
+    df: List[DataFrame],
     x: Optional[str] = None,
     *,
     cfg: Union[Config, Dict[str, Any], None] = None,
@@ -66,17 +65,16 @@ def compute_diff(
         if cfg.diff.baseline > len(df) - 1:
             raise ValueError("Baseline is out of the boundary of the input.")
 
-        df_list = list(map(to_dask, df))
-        for i, _ in enumerate(df_list):
-            df_list[i].columns = df_list[i].columns.astype(str)
+        df_list = [to_pandas(dfi) for dfi in df]
 
-        if x:
-            if [col for dfs in df for col in dfs.columns].count(x) < 2:
+        if x is not None:
+            x = str(x)
+            if sum(x in map(str, dfi.columns) for dfi in df_list) < 2:
                 raise DataprepError("x must exist in at least two DataFrames")
-            # return compare_multiple_on_column(df_list, x)
-            return compare_multiple_col(df_list, x, cfg)  # type: ignore
-        else:
-            return compare_multiple_df(df_list, cfg, dtype)  # type: ignore
+            return compare_multiple_col(df_list, x, cfg)
+        return compare_multiple_df(df_list, cfg, dtype)
 
-    else:
-        raise TypeError(f"Invalid input type: {type(df)}")
+    raise TypeError(
+        f"plot_diff expects a list of DataFrames, got {type(df).__name__}. "
+        "Example: plot_diff([df1, df2])"
+    )

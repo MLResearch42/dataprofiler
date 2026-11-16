@@ -1,7 +1,8 @@
 import string
-from typing import Any, Dict, List, Optional, Tuple, Mapping, Callable, Union
-import pandas as pd
+from typing import Any, Callable, Mapping, Union
+
 import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -133,7 +134,8 @@ def gen_random_series(
     # Replace some values with NA.
     na_pos = object_series.sample(frac=na_ratio, random_state=rand).index
     if not na_pos.empty:
-        object_series[na_pos] = np.nan
+        # mask() upcasts where needed (int -> float, bool -> object), like old pandas did
+        object_series = object_series.mask(object_series.index.isin(na_pos))
     return object_series
 
 

@@ -2,9 +2,11 @@
 Implement numerical median imputer.
 """
 
-from typing import Any, Union, List, Optional
-import math
-import dask.dataframe as dd
+from typing import Any, List, Optional, Union
+
+import pandas as pd
+
+from ...utils import in_null_values, is_missing
 
 
 class MedianImputer:
@@ -29,7 +31,7 @@ class MedianImputer:
         self.null_values = null_values
         self.median = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Find the median value for median imputer according to the provided column.
 
@@ -38,10 +40,10 @@ class MedianImputer:
         col_df
             Provided data column.
         """
-        self.median = col_df.values.median()
+        self.median = pd.to_numeric(col_df, errors="coerce").median()
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Impute the provided data column with the fitted median value.
 
@@ -54,7 +56,7 @@ class MedianImputer:
         result = col_df.map(self.fillna)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Extract the median value from provided column.
         Impute the data column with extracted median value.
@@ -76,11 +78,9 @@ class MedianImputer:
         Parameters
         ----------
         val
-            Each value in dask's Series
+            Each value in the pandas Series
         """
 
-        if isinstance(val, str) and val in self.null_values:
-            return self.median
-        if math.isnan(float(val)):
+        if is_missing(val) or in_null_values(val, self.null_values):
             return self.median
         return val

@@ -4,8 +4,6 @@ for plot_correlation(df) function."""
 import sys
 from typing import Optional, Tuple
 
-import dask
-import dask.array as da
 import numpy as np
 import pandas as pd
 
@@ -41,10 +39,12 @@ def _calc_univariate(
     num_df = df.select_num_columns()
 
     if len(num_df.columns) == 0:
-        return Intermediate(visual_type=None)
+        raise ValueError("plot_correlation needs numerical columns, but the data has none.")
 
     if x not in num_df.columns:
-        raise ValueError(f"{x} not in numerical column names")
+        raise ValueError(
+            f"{x!r} is not a numerical column. Numerical columns: {list(num_df.columns)}"
+        )
 
     columns = num_df.columns[num_df.columns != x]
     xarr = num_df.values[:, num_df.columns == x]
@@ -52,16 +52,14 @@ def _calc_univariate(
 
     funcs = []
     if cfg.pearson.enable:
-        funcs.append(_pearson_1xn)
+        funcs.append((CorrelationMethod.Pearson, _pearson_1xn))
     if cfg.spearman.enable:
-        funcs.append(_spearman_1xn)
+        funcs.append((CorrelationMethod.Spearman, _spearman_1xn))
     if cfg.kendall.enable:
-        funcs.append(_kendall_tau_1xn)
+        funcs.append((CorrelationMethod.KendallTau, _kendall_tau_1xn))
 
     dfs = {}
-    (computed,) = dask.compute(
-        {meth: func(xarr, data) for meth, func in zip(CorrelationMethod, funcs)}
-    )
+    computed = {meth: func(xarr, data) for meth, func in funcs}
 
     for meth, corrs in computed.items():
         indices, corrs = _corr_filter(corrs, value_range, k)
@@ -82,47 +80,50 @@ def _calc_univariate(
     return Intermediate(data=dfs, visual_type="correlation_single_heatmaps")
 
 
-def _pearson_1xn(x: da.Array, data: da.Array) -> da.Array:
-    _, ncols = data.shape
+def _pearson_1xn(x: np.ndarray, data: np.ndarray) -> np.ndarray:
+    """Pearson correlation of column x (rows x 1) with every column of data.
 
-    fused = da.concatenate([data, x], axis=1)
-    mask = ~da.isnan(fused)
+    Each pair uses the rows where both values are present.
+    """
+    x = np.asarray(x, dtype=float).reshape(-1)
+    data = np.asarray(data, dtype=float)
+    xmask = ~np.isnan(x)
 
-    corrs = []
-    for j in range(ncols):
-        xy = fused[:, [-1, j]]
-        mask_ = mask[:, -1] & mask[:, j]
-        xy = xy[mask_]
-        corr = da.from_delayed(corrcoef(xy), dtype=float, shape=())
-        # not usable because xy has unknown rows due to the null filter
-        # _, (corr, _) = da.corrcoef(xy, rowvar=False)
-        corrs.append(corr)
-
-    return da.stack(corrs)
+    corrs = np.empty(data.shape[1])
+    for j in range(data.shape[1]):
+        y = data[:, j]
+        mask = xmask & ~np.isnan(y)
+        corrs[j] = corrcoef(np.column_stack([x[mask], y[mask]]))
+    return corrs
 
 
-def _spearman_1xn(x: da.Array, data: da.Array) -> da.Array:
-    xrank = da.from_delayed(nanrankdata(x), dtype=float, shape=x.shape)
-    ranks = da.from_delayed(nanrankdata(data), dtype=float, shape=data.shape)
+def _spearman_1xn(x: np.ndarray, data: np.ndarray) -> np.ndarray:
+    """Spearman correlation of column x with every column of data."""
+    x = np.asarray(x, dtype=float).reshape(-1)
+    data = np.asarray(data, dtype=float)
+    xmask = ~np.isnan(x)
 
-    return _pearson_1xn(xrank, ranks)
+    corrs = np.empty(data.shape[1])
+    for j in range(data.shape[1]):
+        y = data[:, j]
+        mask = xmask & ~np.isnan(y)
+        # rank within the rows both columns share, so the result matches pandas
+        corrs[j] = corrcoef(np.column_stack([nanrankdata(x[mask]), nanrankdata(y[mask])]))
+    return corrs
 
 
-def _kendall_tau_1xn(x: da.Array, data: da.Array) -> da.Array:
-    _, ncols = data.shape
+def _kendall_tau_1xn(x: np.ndarray, data: np.ndarray) -> np.ndarray:
+    """Kendall's tau of column x with every column of data."""
+    x = np.asarray(x, dtype=float).reshape(-1)
+    data = np.asarray(data, dtype=float)
+    xmask = ~np.isnan(x)
 
-    datamask = da.isnan(data)
-    xmask = da.isnan(x)[:, 0]
-
-    corrs = []
-    for j in range(ncols):
-        y = data[:, [j]]
-
-        mask = ~(xmask | datamask[:, j])
-        corr = da.from_delayed(kendalltau(x[mask], y[mask]), dtype=float, shape=())
-        corrs.append(corr)
-
-    return da.stack(corrs)
+    corrs = np.empty(data.shape[1])
+    for j in range(data.shape[1]):
+        y = data[:, j]
+        mask = xmask & ~np.isnan(y)
+        corrs[j] = kendalltau(x[mask], y[mask])
+    return corrs
 
 
 def _corr_filter(

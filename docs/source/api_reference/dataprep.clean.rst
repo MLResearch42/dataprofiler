@@ -1138,3 +1138,654 @@ SEPA Identifier of the Creditor
    :members:
    :undoc-members:
    :show-inheritance:
+
+National identifiers and codes added in 0.5.0
+---------------------------------------------
+
+Austrian company register numbers (Firmenbuchnummer)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_at_businessid
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Austrian postal codes (Postleitzahl)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_at_postleitzahl
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Austrian tax identification numbers (Abgabenkontonummer)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_at_tin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Azerbaijani tax numbers (VÖEN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_az_voen
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Belgian BIS numbers (BIS)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_be_bis
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Belgian electronic identity card numbers (eID)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_be_eid
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Belgian national numbers (NN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_be_nn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Belgian structured payment references (OGM-VCS)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_be_ogm_vcs
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Belgian social security numbers (SSN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_be_ssn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+British Columbia personal health numbers (PHN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ca_bc_phn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ISO 10962 Classification of Financial Instruments codes (CFI)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_cfi
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Czech bank account numbers (bank account)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_cz_bankaccount
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+German electronic invoice routing identifiers (Leitweg-ID)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_de_leitweg
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Algerian tax numbers (NIF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_dz_nif
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Egyptian tax registration numbers (TN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_eg_tn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Spanish activity establishment codes (CAE)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_es_cae
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Spanish postal codes (postal code)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_es_postal_code
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+European Community numbers for chemical substances (EC number)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_eu_ecnumber
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+European excise numbers (excise number)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_eu_excise
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+European One Stop Shop VAT numbers (OSS)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_eu_oss
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Faroese tax numbers (V-number)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_fo_vn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+French excise numbers (accise)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_fr_accise
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+French trade registration numbers (RCS)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_fr_rcs
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Ghanaian taxpayer identification numbers (TIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_gh_tin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Guinean tax numbers (NIFp)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_gn_nifp
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+GS1-128 barcode data (GS1-128)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_gs1_128
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Indonesian identity numbers (NIK)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_id_nik
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Indian voter ID numbers (EPIC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_in_epic
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Indian GST identification numbers (GSTIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_in_gstin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Indian virtual identity numbers (VID)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_in_vid
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+International Standard Name Identifiers (ISNI)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_isni
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ISO 11649 structured creditor references (creditor reference)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_iso11649
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ISO 6346 shipping container codes (container code)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_iso6346
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+International Standard Recording Codes (ISRC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_isrc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Japanese individual numbers (IN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_jp_in
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Kenyan personal identification numbers (PIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ke_pin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Moroccan company identifiers (ICE)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ma_ice
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+MAC addresses (MAC address)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_mac
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Montenegrin tax numbers (PIB)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_me_pib
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+North Macedonian tax numbers (EDB)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_mk_edb
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Mozambican tax numbers (NUIT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_mz_nuit
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Dutch passport and identity card numbers (document number)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_nl_identiteitskaartnummer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Pakistani national identity card numbers (CNIC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_pk_cnic
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Portuguese citizen card numbers (CC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_pt_cc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Serbian tax numbers (PIB)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_rs_pib
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Russian tax identifiers (INN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ru_inn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Russian primary state registration numbers (OGRN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ru_ogrn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Swedish company numbers (Orgnr)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_se_orgnr
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Swedish personal identity numbers (Personnummer)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_se_personnummer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Swedish postal codes (Postnummer)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_se_postnummer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Swedish VAT numbers (VAT)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_se_vat
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Singaporean unique entity numbers (UEN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sg_uen
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Slovenian VAT numbers (DDV)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_si_ddv
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Slovenian unique master citizen numbers (EMŠO)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_si_emso
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Slovenian corporate registration numbers (Matična)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_si_maticna
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Slovak VAT numbers (DPH)
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sk_dph
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Slovak birth numbers (RČ)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sk_rc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+San Marino tax numbers (COE)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sm_coe
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Senegalese company and association numbers (NINEA)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sn_ninea
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Salvadoran tax numbers (NIT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_sv_nit
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Thai memorandum of association numbers (MOA)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_th_moa
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Thai personal identification numbers (PIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_th_pin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Thai taxpayer identification numbers (TIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_th_tin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Tunisian tax numbers (MF)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_tn_mf
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Turkish personal identification numbers (T.C. Kimlik)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_tr_tckimlik
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Turkish tax identification numbers (VKN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_tr_vkn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Taiwanese unified business numbers (UBN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_tw_ubn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Ukrainian enterprise identifiers (EDRPOU)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ua_edrpou
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Ukrainian individual taxpayer numbers (RNTRC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ua_rntrc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. adoption taxpayer identification numbers (ATIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_atin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. employer identification numbers (EIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_ein
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. individual taxpayer identification numbers (ITIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_itin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. preparer tax identification numbers (PTIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_ptin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. bank routing transit numbers (RTN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_rtn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. Social Security numbers (SSN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_ssn
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+U.S. taxpayer identification numbers (SSN, ITIN, ATIN, EIN or PTIN) (TIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_us_tin
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Uruguayan tax numbers (RUT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_uy_rut
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Venezuelan tax numbers (RIF)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_ve_rif
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Vietnamese tax numbers (MST)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_vn_mst
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+South African identity document numbers (ID number)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_za_idnr
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+South African tax identification numbers (TIN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: dataprep.clean.clean_za_tin
+   :members:
+   :undoc-members:
+   :show-inheritance:

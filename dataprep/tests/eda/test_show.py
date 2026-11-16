@@ -1,8 +1,9 @@
 # type: ignore
 from os import environ
+
 import dask.dataframe as dd
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
 
 from ...eda import plot, plot_correlation, plot_missing

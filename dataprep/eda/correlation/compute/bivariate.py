@@ -1,17 +1,15 @@
 """This module implements the intermediates computation
-for plot_correlation(df) function."""
+for plot_correlation(df, x, y) function."""
 
-from operator import itruediv
 from typing import Optional, Tuple
 
-import dask
-import dask.array as da
-import dask.dataframe as dd
 import numpy as np
+import pandas as pd
 
-from ...eda_frame import EDAFrame
 from ...configs import Config
+from ...eda_frame import EDAFrame
 from ...intermediate import Intermediate
+from ...utils import sample_frame
 
 
 def _calc_bivariate(
@@ -22,94 +20,77 @@ def _calc_bivariate(
     *,
     k: Optional[int] = None,
 ) -> Intermediate:
+    num_df: pd.DataFrame = df.select_num_columns().frame
 
-    num_df: dd.DataFrame = df.select_num_columns().frame
-
-    if x not in num_df.columns:
-        raise ValueError(f"{x} not in columns names")
-    if y not in num_df.columns:
-        raise ValueError(f"{y} not in columns names")
+    for col in (x, y):
+        if col not in num_df.columns:
+            raise ValueError(
+                f"{col!r} is not a numerical column. Numerical columns: {list(num_df.columns)}"
+            )
 
     num_df = num_df[[x, y]].dropna()
     coeffs, df_smp, influences = scatter_with_regression(num_df, cfg, k=k)
 
-    coeffs, df_smp, influences = dask.compute(coeffs, df_smp, influences)
-
     result = {"coeffs": coeffs, "data": df_smp}
-
-    if (influences is None) != (k is None):
-        raise RuntimeError("Not possible")
 
     if influences is not None and k is not None:
         infidx = np.argsort(influences)
         labels = np.full(len(influences), "=")
         # pylint: disable=invalid-unary-operand-type
-        labels[infidx[-k:]] = "-"  # type: ignore
+        labels[infidx[-k:]] = "-"
         # pylint: enable=invalid-unary-operand-type
         labels[infidx[:k]] = "+"
-        result["data"]["influence"] = labels  # type: ignore
+        result["data"]["influence"] = labels
 
     return Intermediate(**result, visual_type="correlation_scatter")
 
 
 def scatter_with_regression(
-    df: dd.DataFrame, cfg: Config, k: Optional[int] = None
-) -> Tuple[Tuple[da.Array, da.Array], Tuple[da.Array, da.Array], Optional[da.Array]]:
-    """Sample and compute regression line"""
-    df["ones"] = 1
-    arr = df.to_dask_array(lengths=True)
+    df: pd.DataFrame, cfg: Config, k: Optional[int] = None
+) -> Tuple[Tuple[float, float], pd.DataFrame, Optional[np.ndarray]]:
+    """Fit the regression line y = a * x + b on all rows, then sample rows for the scatter."""
+    xarr = df.iloc[:, 0].to_numpy(dtype=float)
+    yarr = df.iloc[:, 1].to_numpy(dtype=float)
+    finite = np.isfinite(xarr) & np.isfinite(yarr)
 
-    (coeffa, coeffb), _, _, _ = da.linalg.lstsq(arr[:, [0, 2]], arr[:, 1])
-
-    df = df.drop(columns=["ones"])
-    if cfg.scatter.sample_size is not None:
-        sample_func = lambda x: x.sample(n=min(cfg.scatter.sample_size, x.shape[0]))
+    if finite.sum() >= 2 and np.ptp(xarr[finite]) > 0:
+        design = np.column_stack([xarr[finite], np.ones(int(finite.sum()))])
+        (coeffa, coeffb), *_ = np.linalg.lstsq(design, yarr[finite], rcond=None)
     else:
-        sample_func = lambda x: x.sample(frac=cfg.scatter.sample_rate)
-    df_smp = df.map_partitions(
-        sample_func,
-        meta=df,
-    )
-    # TODO influences should not be computed on a sample
+        coeffa, coeffb = np.nan, np.nan
+
+    df_smp = sample_frame(df, cfg.scatter.sample_size, cfg.scatter.sample_rate).copy()
+    # NOTE: influences are computed on the sample that is drawn
     influences = (
         pearson_influence(
-            df_smp[df.columns[0]].to_dask_array(lengths=True),
-            df_smp[df.columns[1]].to_dask_array(lengths=True),
+            df_smp.iloc[:, 0].to_numpy(dtype=float), df_smp.iloc[:, 1].to_numpy(dtype=float)
         )
         if k
         else None
     )
 
-    return (coeffa, coeffb), df_smp, influences
+    return (float(coeffa), float(coeffb)), df_smp, influences
 
 
-def pearson_influence(xarr: da.Array, yarr: da.Array) -> da.Array:
-    """Calculating the influence for deleting a point on the pearson correlation"""
+def pearson_influence(xarr: np.ndarray, yarr: np.ndarray) -> np.ndarray:
+    """The Pearson correlation that would result from deleting each point in turn."""
 
     if xarr.shape != yarr.shape:
         raise ValueError(
             f"The shape of xarr and yarr should be same, got {xarr.shape}, {yarr.shape}"
         )
 
-    # Fast calculating the influence for removing one element on the correlation
     n = xarr.shape[0]
-
-    x2, y2 = da.square(xarr), da.square(yarr)
+    x2, y2 = np.square(xarr), np.square(yarr)
     xy = xarr * yarr
 
-    # The influence is vectorized on xarr and yarr, so we need to repeat all the sums for n times
+    xsum, ysum, xysum = xarr.sum(), yarr.sum(), xy.sum()
+    x2sum, y2sum = x2.sum(), y2.sum()
 
-    xsum = da.ones(n) * da.sum(xarr)
-    ysum = da.ones(n) * da.sum(yarr)
-    xysum = da.ones(n) * da.sum(xy)
-    x2sum = da.ones(n) * da.sum(x2)
-    y2sum = da.ones(n) * da.sum(y2)
-
-    # Note: in we multiply (n-1)^2 to both denominator and numerator to avoid divisions.
+    # (n-1)^2 is multiplied into both numerator and denominator to avoid divisions.
     numerator = (n - 1) * (xysum - xy) - (xsum - xarr) * (ysum - yarr)
+    varx = (n - 1) * (x2sum - x2) - np.square(xsum - xarr)
+    vary = (n - 1) * (y2sum - y2) - np.square(ysum - yarr)
 
-    varx = (n - 1) * (x2sum - x2) - da.square(xsum - xarr)
-    vary = (n - 1) * (y2sum - y2) - da.square(ysum - yarr)
-    denominator = da.sqrt(varx * vary)
-
-    return da.map_blocks(itruediv, numerator, denominator, dtype=numerator.dtype)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return numerator / np.sqrt(varx * vary)

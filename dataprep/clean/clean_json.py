@@ -2,25 +2,33 @@
 Clean and validate a DataFrame column containing JSON.
 """
 
-from typing import Any, Union
-import json
+from __future__ import annotations
 
-# import dask
-import dask.dataframe as dd
+import json
+from functools import partial
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 
-# from .utils import to_dask
+from .utils import add_columns, check_errors, is_null, map_column, validate_values
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 def clean_json(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
-    #  split: bool = True,
     errors: str = "coerce",
 ) -> pd.DataFrame:
     """
-    Clean and standardize JSON.
+    Parse a column of JSON strings and split the JSON objects into columns.
+
+    The values of the column are replaced by the parsed JSON (for example a
+    dictionary for a JSON object), and one column is appended for every key of
+    the JSON objects. Nested objects are flattened, with the keys joined by a
+    dot ("address.city"). The input DataFrame is not modified.
 
     Parameters
     ----------
@@ -28,108 +36,96 @@ def clean_json(
         A pandas or Dask DataFrame containing the data to be cleaned.
     column
         The name of the column containing JSON.
-    split
-        If True, split the JSON into the semantic columns.
-        If False, return a column of dictionaries with the relavant
-        information (e.g., scheme, hostname, etc.) as key-value pairs.
-
-        (default: False)
-    inplace
-        If True, delete the column containing the data that was cleaned. Otherwise,
-        keep the original column.
-
-        (default: False)
     errors
         How to handle parsing errors.
-            - ‘coerce’: invalid parsing will be set to NaN.
-            - ‘ignore’: invalid parsing will return the input.
-            - ‘raise’: invalid parsing will raise an exception.
+            - 'coerce': invalid parsing will be set to NaN.
+            - 'ignore': invalid parsing will return the input.
+            - 'raise': invalid parsing will raise an exception.
 
         (default: 'coerce')
 
     Examples
     --------
     Split a json into its components.
-    >>> df = pd.DataFrame({ "messy_json": [
-                  '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com"}',
-                  '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com"}'
-                        ]})
-    >>> clean_json(df, column)
 
+    >>> df = pd.DataFrame({"messy_json": ['{"name": "jane doe", "salary": 9000}', "not json"]})
+    >>> clean_json(df, "messy_json")
+                               messy_json      name  salary
+    0  {'name': 'jane doe', 'salary': 9000}  jane doe  9000.0
+    1                                   NaN       NaN     NaN
     """
+    check_errors(errors)
 
-    if not validate_json(df[column]).all():
-        if errors == "raise":
-            raise ValueError("Unable to clean value")
-        error_result = df if errors == "ignore" else np.nan
-        return error_result
-    # df[column] = df[column].apply(lambda x: json.loads(x))
-    df[column] = df.apply(lambda x: json.loads(x[column]), axis=1)
-    new = pd.json_normalize(df[column])
-    new_df = pd.concat([df, new], axis=1)
-    new_df = new_df.astype(str)
-    # convert to dask
-    # df = to_dask(new_df)
+    pdf, rows = map_column(df, column, partial(_format_json, errors=errors))
+    parsed = [row[0] for row in rows]
 
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
+    # one column for each (flattened) key of the JSON objects
+    records = [val if isinstance(val, dict) else {} for val in parsed]
+    flattened = pd.json_normalize(records) if records else pd.DataFrame()
 
-    # df["clean_code_tup"] = df[column].map_partitions(
-    #     lambda srs: [_format_json(x, split, errors) for x in srs],
-    #     meta=object,
-    # )
-    # print( dir(df["clean_code_tup"].map(itemgetter(0))))
-    # df = df.assign(
-    #     _temp_=df["clean_code_tup"].map(itemgetter(0)),
-    # )
-
-    # df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    # df = df.drop(columns=["clean_code_tup"])
-
-    return new_df
+    new_columns: dict[str, Any] = {column: parsed}
+    for key in flattened.columns:
+        name = str(key)
+        # do not overwrite a column of the input DataFrame that has the same name as a key
+        if name in pdf.columns:
+            name = f"{column}_{name}"
+        new_columns[name] = flattened[key].tolist()
+    return add_columns(pdf, new_columns)
 
 
-def validate_json(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
+def validate_json(x: str | pd.Series) -> bool | pd.Series:
     """
     Validate JSON.
 
     Parameters
     ----------
     x
-        pandas Series of JSON.
+        pandas Series of JSON strings, or a single JSON string.
 
     Examples
     --------
 
+    >>> validate_json('{"name": "jane doe"}')
+    True
     >>> df = pd.DataFrame(
-        {
-            "messy_json": [
-              '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com",}',
-              '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com"}'
-            ]
-        }
-    )
+    ...     {
+    ...         "messy_json": [
+    ...             '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com",}',
+    ...             '{"name": "jane doe", "salary": 9000, "email": "jane.doe@pynative.com"}',
+    ...         ]
+    ...     }
+    ... )
     >>> validate_json(df["messy_json"])
     0    False
     1     True
     Name: messy_json, dtype: bool
     """
-    # x = x.apply(str)
-    if isinstance(x, pd.Series):
-        return x.apply(_check_json, args=(False,))
+    return validate_values(x, partial(_check_json, clean=False))
 
-    return _check_json(x, False)
+
+def _format_json(val: Any, errors: str) -> tuple[Any]:
+    """
+    Parse a JSON string. Null values and, if errors is "coerce",
+    invalid values are returned as NaN.
+    """
+    if is_null(val):
+        return (np.nan,)
+    try:
+        return (json.loads(val),)
+    except (ValueError, TypeError):
+        if errors == "raise":
+            raise ValueError(f"Unable to parse value {val}") from None
+        return (val if errors == "ignore" else np.nan,)
 
 
 def _check_json(json_data: Any, clean: bool) -> Any:
     """
     Function to check whether a value is a valid json
     """
+    if is_null(json_data):
+        return "null" if clean else False
     try:
         json.loads(json_data)
-    except ValueError:
+    except (ValueError, TypeError):
         return "unknown" if clean else False
     return "success" if clean else True

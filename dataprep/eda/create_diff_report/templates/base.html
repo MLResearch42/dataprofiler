@@ -1,9 +1,12 @@
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title> {{ context.title }} </title>
+  <title>{{ context.title|e }}</title>
+  {% set auto_height = false %}
+  {% include 'frame_scripts.html' %}
   {% include 'scripts.html' %}
   {% include 'styles.html' %}
 </head>
@@ -27,6 +30,7 @@
   </nav>
 
   <div class="container-main">
+    {% include 'sample_note.html' %}
 
     {% if context.components.dfs[0].has_overview %}
     <div>
@@ -52,7 +56,7 @@
   </div>
 
   <footer class="footer">
-    <p>Report generated with <a href="https://dataprep.ai/">DataPrep</a></p>
+    <p>Report generated with DataPrep</p>
   </footer>
 
 </body>

@@ -2,27 +2,26 @@
 
 from typing import Optional
 
-import dask
-import dask.dataframe as dd
+import pandas as pd
 
 from ...configs import Config
-from ...dtypes_v2 import (
+from ...dtypes import (
     Continuous,
     DateTime,
     DTypeDef,
-    Nominal,
     GeoGraphy,
-    SmallCardNum,
     GeoPoint,
-    Union,
+    Nominal,
+    SmallCardNum,
 )
+from ...eda_frame import DataFrame, EDAFrame
 from ...intermediate import Intermediate
-from ...eda_frame import EDAFrame
 from ...utils import _calc_line_dt
+from .common import gen_new_df_with_used_cols
 
 
 def compute_trivariate(
-    df: Union[dd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     col1: str,
     col2: str,
     col3: str,
@@ -52,69 +51,51 @@ def compute_trivariate(
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-locals
 
-    x, y, z = col1, col2, col3
-    frame = EDAFrame(df[[x, y, z]], dtype)
+    if len({col1, col2, col3}) != 3:
+        raise ValueError(f"The three columns must be different, got {col1}, {col2}, {col3}.")
+    _, ndf = gen_new_df_with_used_cols(df, col1, col2, col3)
+    x, y, z = str(col1), str(col2), str(col3)
+    frame = EDAFrame(ndf, dtype)
 
-    xtype = frame.get_eda_dtype(x)
-    ytype = frame.get_eda_dtype(y)
-    ztype = frame.get_eda_dtype(z)
+    if frame.shape[0] == 0:
+        raise ValueError("The DataFrame has no rows, there is nothing to plot.")
 
-    # Note that CategoricalTypes need to be defined case by case. Whether
-    # SmallCardNum and GeoPoint treated as Categorical is depends on the function.
-    # pylint: disable = invalid-name
-    CategoricalTypes = (Nominal, GeoGraphy, SmallCardNum, GeoPoint)
-
-    # Make x datetime, y: numerical, z: categorical
-    if (
-        isinstance(xtype, DateTime)
-        and isinstance(ytype, CategoricalTypes)
-        and isinstance(ztype, Continuous)
-    ):
-        y, z = z, y
-    elif (
-        isinstance(xtype, Continuous)
-        and isinstance(ytype, DateTime)
-        and isinstance(ztype, CategoricalTypes)
-    ):
-        x, y = y, x
-    elif (
-        isinstance(xtype, Continuous)
-        and isinstance(ytype, CategoricalTypes)
-        and isinstance(ztype, DateTime)
-    ):
-        x, y, z = z, x, y
-    elif (
-        isinstance(xtype, CategoricalTypes)
-        and isinstance(ytype, DateTime)
-        and isinstance(ztype, Continuous)
-    ):
-        x, y, z = y, z, x
-    elif (
-        isinstance(xtype, CategoricalTypes)
-        and isinstance(ytype, Continuous)
-        and isinstance(ztype, DateTime)
-    ):
-        x, z = z, x
-    else:
+    # Whichever order the columns were given in, find the datetime (x),
+    # the numerical (y) and the categorical (z) one.
+    categorical_types = (Nominal, GeoGraphy, SmallCardNum, GeoPoint)
+    roles = {}
+    for col in (x, y, z):
+        col_type = frame.get_eda_dtype(col)
+        if isinstance(col_type, DateTime):
+            roles.setdefault("datetime", col)
+        elif isinstance(col_type, Continuous):
+            roles.setdefault("numerical", col)
+        elif isinstance(col_type, categorical_types):
+            roles.setdefault("categorical", col)
+    if len(roles) != 3:
+        types = ", ".join(f"{col}: {type(frame.get_eda_dtype(col)).__name__}" for col in (x, y, z))
         raise ValueError(
-            "Three column types must be one each of type datetime, numerical, and categorical."
-            + f" Current types:({x},{xtype}), ({y},{ytype}), ({z},{ztype})"
+            "plot(df, x, y, z) needs one datetime, one numerical and one categorical column. "
+            f"Detected types: {types}. Use the dtype argument to override a detected type."
         )
+    x, y, z = roles["datetime"], roles["numerical"], roles["categorical"]
 
-    tmp_df = frame.frame[[x, y, z]].dropna()
-    tmp_df[z] = tmp_df[z].astype(str)
+    # x: datetime, y: numerical, z: categorical (as strings)
+    tmp_df = pd.DataFrame(
+        {x: frame.frame[x], y: frame.frame[y], z: frame.get_col_as_str(z)}, copy=False
+    ).dropna()
+    if len(tmp_df) == 0:
+        raise ValueError("No rows are left after dropping missing values.")
 
     # line chart
-    data = dask.compute(
-        dask.delayed(_calc_line_dt)(
-            df, cfg.line.unit, cfg.line.agg, cfg.line.ngroups, cfg.line.sort_descending
-        )
+    data = _calc_line_dt(
+        tmp_df, cfg.line.unit, cfg.line.agg, cfg.line.ngroups, cfg.line.sort_descending
     )
     return Intermediate(
         x=x,
         y=y,
         z=z,
         agg=cfg.line.agg,
-        data=data[0],
+        data=data,
         visual_type="dt_cat_num_cols",
     )

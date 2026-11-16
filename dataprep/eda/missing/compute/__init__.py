@@ -2,14 +2,14 @@
 calculating intermediate part
 """
 
-from typing import Optional, cast, List, Any, Dict, Union
 import warnings
+from typing import Any, Dict, List, Optional, Union, cast
+
 from scipy.cluster.hierarchy import ClusterWarning
 
 from ...configs import Config
+from ...dtypes import DTypeDef
 from ...eda_frame import DataFrame, EDAFrame
-from ...dtypes_v2 import DTypeDef
-from ...utils import preprocess_dataframe
 from ...intermediate import Intermediate
 from .bivariate import compute_missing_bivariate
 from .nullivariate import compute_missing_nullivariate

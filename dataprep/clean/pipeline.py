@@ -2,12 +2,12 @@
 Implement pipeline class
 """
 
-from typing import Any, Tuple, Dict
+from typing import Any, Dict, Tuple
 
-import dask.dataframe as dd
+import pandas as pd
 
 from .components import component_dic
-from .utils import NULL_VALUES
+from .utils import is_null
 
 
 class Pipeline:
@@ -56,8 +56,8 @@ class Pipeline:
 
     def fit(
         self,
-        training_df: dd.Series,
-        test_df: dd.Series,
+        training_df: pd.Series,
+        test_df: pd.Series,
     ) -> Any:
         """
         Fit the parameters for cleaning according to the training data column.
@@ -72,7 +72,7 @@ class Pipeline:
         self.fit_transform(training_df, test_df)
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Transform data column with fitted parameters.
 
@@ -91,8 +91,8 @@ class Pipeline:
         return result
 
     def fit_transform(
-        self, training_df: dd.Series, test_df: dd.Series
-    ) -> Tuple[dd.Series, dd.Series]:
+        self, training_df: pd.Series, test_df: pd.Series
+    ) -> Tuple[pd.Series, pd.Series]:
         """
         Fit the parameters for cleaning according to the training data column.
         Transform training data column and test data column with fitted parameters.
@@ -108,9 +108,9 @@ class Pipeline:
         temp_training_df = training_df
         temp_test_df = test_df
         self.is_num_type = True
-        for _, value in temp_training_df.iteritems():
+        for value in temp_training_df.tolist():
             if isinstance(value, str):
-                if not value.isnumeric() and not value in NULL_VALUES:
+                if not value.isnumeric() and not is_null(value):
                     self.is_num_type = False
                     break
         if not self.is_num_type:

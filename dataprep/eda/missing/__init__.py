@@ -4,13 +4,11 @@
 
 from typing import Any, Dict, List, Optional, Union
 
-import dask.dataframe as dd
-import pandas as pd
-
 from ..configs import Config
 from ..container import Container
-from ..dtypes_v2 import DTypeDef
-from ...progress_bar import ProgressBar
+from ..dtypes import DTypeDef
+from ..eda_frame import DataFrame, sample_rows
+from ..parallel import Progress
 from .compute import compute_missing
 from .render import render_missing
 
@@ -18,13 +16,14 @@ __all__ = ["render_missing", "compute_missing", "plot_missing"]
 
 
 def plot_missing(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     col1: Optional[str] = None,
     col2: Optional[str] = None,
     *,
     config: Optional[Dict[str, Any]] = None,
     display: Optional[List[str]] = None,
     dtype: Optional[DTypeDef] = None,
+    sample: Union[int, float, None] = None,
     progress: bool = True,
 ) -> Container:
     """
@@ -51,22 +50,29 @@ def plot_missing(
         E.g.  dtype = {"a": Continuous, "b": "Nominal"} or
         dtype = {"a": Continuous(), "b": "nominal"}
         or dtype = Continuous() or dtype = "Continuous" or dtype = Continuous().
+    sample
+        Use a random sample of the rows instead of all of them: a number of rows
+        (int) or a fraction of the rows (float). The sample is the same on every
+        run, and the output says that it shows a sample.
     progress
         Enable the progress bar.
 
     Examples
-    ----------
-    >>> from dataprep.eda.missing.computation import plot_missing
-    >>> import pandas as pd
-    >>> df = pd.read_csv("suicide-rate.csv")
-    >>> plot_missing(df, "HDI_for_year")
-    >>> plot_missing(df, "HDI_for_year", "population")
+    --------
+    >>> from dataprep.datasets import load_dataset
+    >>> from dataprep.eda import plot_missing
+    >>> df = load_dataset("titanic")
+    >>> plot_missing(df)  # doctest: +SKIP
+    >>> plot_missing(df, "Age")  # doctest: +SKIP
+    >>> plot_missing(df, "Age", "Fare")  # doctest: +SKIP
     """
     cfg = Config.from_dict(display, config)
+    df, sample_note = sample_rows(df, sample)
 
-    with ProgressBar(minimum=1, disable=not progress):
+    with Progress(enabled=progress):
         itmdt = compute_missing(df, col1, col2, cfg=cfg, dtype=dtype)
 
     to_render = render_missing(itmdt, cfg)
+    to_render["sample_note"] = sample_note
 
     return Container(to_render, itmdt.visual_type, cfg)

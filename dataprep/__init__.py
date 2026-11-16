@@ -2,13 +2,18 @@
 dataprep
 ========
 
-Dataprep let you prepare your data using a single library with a few lines of code.
-"""
+DataPrep lets you explore and clean pandas DataFrames with a few lines of code.
 
-import logging
+* :mod:`dataprep.eda`: interactive plots and profiling reports
+  (``plot``, ``plot_correlation``, ``plot_missing``, ``plot_diff``, ``create_report``).
+* :mod:`dataprep.clean`: 140+ functions that clean and validate column values
+  (``clean_email``, ``clean_phone``, ``clean_country``, ``clean_df``, ...).
+* :mod:`dataprep.datasets`: small example datasets.
+
+This is the maintained continuation of the original DataPrep project, published
+on PyPI as ``dataprep-next``.
+"""
 
 DEFAULT_PARTITIONS = 1
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-__version__ = "0.4.6"
+__version__ = "0.5.0"

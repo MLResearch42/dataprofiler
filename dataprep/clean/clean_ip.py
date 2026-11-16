@@ -2,21 +2,30 @@
 Clean and validate a DataFrame column containing IP addresses.
 """
 
-from ipaddress import ip_address
-from operator import itemgetter
-from typing import Any, Union
+from __future__ import annotations
 
-import dask
-import dask.dataframe as dd
+from functools import partial
+from ipaddress import ip_address
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
-from .utils import NULL_VALUES, create_report_new, to_dask
+from .utils import (
+    check_dataframe,
+    check_errors,
+    clean_column,
+    create_report_new,
+    is_null,
+    validate_values,
+)
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 def clean_ip(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     input_format: str = "auto",
     output_format: str = "compressed",
@@ -24,7 +33,7 @@ def clean_ip(
     errors: str = "coerce",
     report: bool = True,
     progress: bool = True,
-) -> Union[pd.DataFrame, dd.DataFrame]:
+) -> pd.DataFrame:
     """
     Clean and standardize IP addresses.
 
@@ -89,8 +98,7 @@ def clean_ip(
     # pylint: disable=too-many-arguments
 
     # check if the parameters are of correct processing types and values
-    if not isinstance(df, (pd.DataFrame, dd.DataFrame)):
-        raise ValueError("df is invalid, it needs to be a pandas or Dask DataFrame")
+    check_dataframe(df)
 
     if not isinstance(column, str):
         raise ValueError(f"column {column} is invalid")
@@ -112,35 +120,16 @@ def clean_ip(
     if not isinstance(report, bool):
         raise ValueError(f"report {report} is invalid, it needs to be True or False")
 
-    if errors not in {"coerce", "ignore", "raise"}:
-        raise ValueError(f'errors {errors} is invalid, it needs to be "coerce", "ignore", "raise"')
+    check_errors(errors)
 
-    # convert to dask
-    df = to_dask(df)
-
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format_ip(x, input_format, output_format, errors) for x in srs],
-        meta=object,
+    df, stats = clean_column(
+        df,
+        column,
+        partial(_format_ip, input_format=input_format, output_format=output_format, errors=errors),
+        [f"{column}_clean"],
+        inplace=inplace,
+        progress=progress,
     )
-    df = df.assign(
-        _temp_=df["clean_code_tup"].map(itemgetter(0)),
-        _code_=df["clean_code_tup"].map(itemgetter(1)),
-    )
-    df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
 
     # output a report describing the result of clean_ip
     if report:
@@ -149,7 +138,7 @@ def clean_ip(
     return df
 
 
-def validate_ip(x: Union[str, pd.Series], input_format: str = "auto") -> Union[bool, pd.Series]:
+def validate_ip(x: str | pd.Series, input_format: str = "auto") -> bool | pd.Series:
     """
     Validate IP addresses.
 
@@ -178,9 +167,7 @@ def validate_ip(x: Union[str, pd.Series], input_format: str = "auto") -> Union[b
     1    False
     Name: ip, dtype: bool
     """
-    if isinstance(x, pd.Series):
-        return x.apply(_check_ip, args=(input_format, False))
-    return _check_ip(x, input_format, False)
+    return validate_values(x, partial(_check_ip, input_format=input_format, clean=False))
 
 
 def _format_ip(val: Any, input_format: str, output_format: str, errors: str) -> Any:
@@ -216,9 +203,9 @@ def _format_ip(val: Any, input_format: str, output_format: str, errors: str) -> 
     # converts the ip address to its binary representation
     elif output_format == "binary":
         if address.version == 4:
-            result = "{0:032b}".format(int(address))
+            result = f"{int(address):032b}"
         else:
-            result = "{0:0128b}".format(int(address))
+            result = f"{int(address):0128b}"
 
     # converts to integer format
     elif output_format == "integer":
@@ -240,10 +227,12 @@ def _check_ip(val: Any, input_format: str, clean: bool) -> Any:
     """
     Function to check whether a value is valid ip address
     """
-    try:
-        if val in NULL_VALUES:
-            return (None, "null") if clean else False
+    if is_null(val):
+        return (None, "null") if clean else False
+    if isinstance(val, bool):
+        return (None, "unknown") if clean else False
 
+    try:
         address = ip_address(val)
         vers = address.version
 
@@ -253,37 +242,3 @@ def _check_ip(val: Any, input_format: str, clean: bool) -> Any:
 
     except (TypeError, ValueError):
         return (None, "unknown") if clean else False
-
-
-# def report_ip(nrows: int, errors: str, column: str) -> None:
-#     """
-#     This function displays the stats report
-#     """
-#     correct_format = (
-#         STATS["correct_format"] - 1 if (STATS["first_val"] == 100) else STATS["correct_format"]
-#     )
-#     correct_format_percentage = (correct_format / nrows) * 100
-
-#     incorrect_format = (
-#     STATS["incorrect_format"] - 1 if (STATS["first_val"] == 200) else STATS["incorrect_format"]
-#     )
-#     incorrect_format_percentage = (incorrect_format / nrows) * 100
-
-#     set_to = "NaN" if (errors == "coerce") else "their original values"
-#     result_null = "null values" if (errors == "coerce") else "null / not parsable values"
-#     result = (
-#         f"Result contains {correct_format} "
-#         f"({(correct_format / nrows) * 100 :.2f} %) rows  in correct format(stored in column "\
-#         f"`{column}_transformed`) and {incorrect_format} {result_null}"
-#         f"({(incorrect_format / nrows) * 100:.2f} %)."
-#     )
-
-#     print(
-#         f"""
-# IP address cleaning report:
-#         {correct_format} values parsed ({correct_format_percentage:.2f} %)
-#         {incorrect_format} values unable to be parsed ({incorrect_format_percentage:.2f} %), "\
-#         f"set to {set_to}
-# {result}
-#         """
-#     )

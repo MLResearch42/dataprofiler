@@ -3,13 +3,13 @@
 """
 
 import logging
+
 import numpy as np
 import pandas as pd
 import pytest
+
+from ...datasets import _load_dataset_as_dask, load_dataset
 from ...eda import create_report
-from ...datasets import load_dataset, _load_dataset_as_dask
-import dask.dataframe as dd
-from .random_data_generator import random_df
 
 LOGGER = logging.getLogger(__name__)
 

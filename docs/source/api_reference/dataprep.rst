@@ -20,9 +20,7 @@ auto-generated from the docstrings in the project source code.
    dataprep.eda.diff
    dataprep.eda.create_report
    dataprep.eda
-   dataprep.connector
    dataprep.clean
-
 
 
 EDA Documentation
@@ -38,16 +36,8 @@ EDA Documentation
    dataprep.eda.diff
    dataprep.eda
 
-Connector Documentation
-============================
-
-.. toctree::
-   :maxdepth: 2
-
-   dataprep.connector
-
 Clean Documentation
-============================
+===================
 
 .. toctree::
    :maxdepth: 2

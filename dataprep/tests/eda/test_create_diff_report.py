@@ -3,11 +3,12 @@
 """
 
 import logging
+
 import numpy as np
 import pandas as pd
 import pytest
-from ...eda import create_diff_report
 
+from ...eda import create_diff_report
 
 LOGGER = logging.getLogger(__name__)
 

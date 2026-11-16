@@ -2,8 +2,11 @@
 Implement numerical most frequent imputer.
 """
 
-from typing import Any, Union, List, Optional
-import dask.dataframe as dd
+from typing import Any, List, Optional, Union
+
+import pandas as pd
+
+from ...utils import in_null_values
 
 
 class MostFrequentImputer:
@@ -27,7 +30,7 @@ class MostFrequentImputer:
         self.null_values = null_values
         self.fill_value = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Find the most frequent value for most frequent imputer according to the provided column.
 
@@ -37,10 +40,13 @@ class MostFrequentImputer:
             Provided data column.
         """
 
-        self.fill_value = col_df.value_counts().index[0]
+        counts = col_df[[not in_null_values(val, self.null_values) for val in col_df.tolist()]]
+        counts = counts.value_counts()
+        if len(counts) > 0:
+            self.fill_value = counts.index[0]
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Impute the provided data column with the fitted most frequent value.
 
@@ -53,7 +59,7 @@ class MostFrequentImputer:
         result = col_df.map(self.fillna)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Extract most frequent value from provided column.
         Impute the data column with extracted most frequent value.
@@ -75,10 +81,9 @@ class MostFrequentImputer:
         Parameters
         ----------
         val
-            Each value in dask's Series
+            Each value in the pandas Series
         """
 
-        if not self.null_values is None:
-            if val in self.null_values:
-                return self.fill_value
+        if in_null_values(val, self.null_values):
+            return self.fill_value
         return val

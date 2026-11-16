@@ -2,8 +2,8 @@
 module for testing the functions clean_text() and default_text_pipeline()
 """
 
-import re
 import logging
+import re
 from typing import Any, Dict, List
 
 import numpy as np

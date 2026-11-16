@@ -4,12 +4,10 @@
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import dask.dataframe as dd
-import pandas as pd
-
 from ..configs import Config
 from ..container import Container
-from ...progress_bar import ProgressBar
+from ..eda_frame import DataFrame, sample_rows
+from ..parallel import Progress
 from .compute import compute_correlation
 from .render import render_correlation
 
@@ -17,7 +15,7 @@ __all__ = ["render_correlation", "compute_correlation", "plot_correlation"]
 
 
 def plot_correlation(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     col1: Optional[str] = None,
     col2: Optional[str] = None,
     *,
@@ -25,6 +23,7 @@ def plot_correlation(
     k: Optional[int] = None,
     config: Optional[Dict[str, Any]] = None,
     display: Optional[List[str]] = None,
+    sample: Union[int, float, None] = None,
     progress: bool = True,
 ) -> Container:
     """
@@ -51,32 +50,37 @@ def plot_correlation(
     display
         A list containing the names of the visualizations to display
         E.g. display=["Pearson"]
+    sample
+        Use a random sample of the rows instead of all of them: a number of rows
+        (int) or a fraction of the rows (float). The sample is the same on every
+        run, and the output says that it shows a sample.
     progress
         Enable the progress bar.
+
     Examples
     --------
-    >>> from dataprep.eda.correlation.computation import plot_correlation
-    >>> import pandas as pd
-    >>> df = pd.read_csv("suicide-rate.csv")
-    >>> plot_correlation(df)
-    >>> plot_correlation(df, k=6)
-    >>> plot_correlation(df, "suicides")
-    >>> plot_correlation(df, "suicides", k=3)
-    >>> plot_correlation(df, "suicides", value_range=[-1, 0.3])
-    >>> plot_correlation(df, "suicides", value_range=[-1, 0.3], k=2)
-    >>> plot_correlation(df, x_name="population", y_name="suicides_no")
-    >>> plot_correlation(df, x_name="population", y_name="suicides", k=5)
+    >>> from dataprep.datasets import load_dataset
+    >>> from dataprep.eda import plot_correlation
+    >>> df = load_dataset("house_prices_train")
+    >>> plot_correlation(df)  # doctest: +SKIP
+    >>> plot_correlation(df, k=6)  # doctest: +SKIP
+    >>> plot_correlation(df, "SalePrice")  # doctest: +SKIP
+    >>> plot_correlation(df, "SalePrice", k=3)  # doctest: +SKIP
+    >>> plot_correlation(df, "SalePrice", value_range=(0.5, 1))  # doctest: +SKIP
+    >>> plot_correlation(df, "GrLivArea", "SalePrice")  # doctest: +SKIP
 
     Note
     ----
-    This function only supports numerical or categorical data,
-    and it is better to drop None, Nan and Null value before using it
+    Only numerical columns are used.
     """
 
     cfg = Config.from_dict(display, config)
+    df, sample_note = sample_rows(df, sample)
 
-    with ProgressBar(minimum=1, disable=not progress):
+    with Progress(enabled=progress):
         itmdt = compute_correlation(df, col1, col2, cfg=cfg, value_range=value_range, k=k)
     to_render = render_correlation(itmdt, cfg)
+    if isinstance(to_render, dict):
+        to_render["sample_note"] = sample_note
 
     return Container(to_render, itmdt.visual_type, cfg)

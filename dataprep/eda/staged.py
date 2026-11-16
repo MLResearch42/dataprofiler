@@ -1,8 +1,12 @@
-"""Decorator to make it cope with two staged computation easily."""
+"""Decorator that splits a computation into a "gather" and a "finish" stage.
+
+A staged function is written as a generator: it yields the raw results it
+gathered and receives them back to build the final ``Intermediate``. Callers
+that want to run the two stages separately (``create_report`` does) pass
+``_staged=True`` and get ``(raw results, completion function)``.
+"""
 
 from typing import Any, Callable, Generator, Tuple, Union, cast
-
-import dask
 
 from .intermediate import Intermediate
 
@@ -28,10 +32,11 @@ def staged(
             except StopIteration as stop:
                 return cast(Intermediate, stop.value)
 
+        gathered = next(gen)
         if _staged:
-            return next(gen), completion
-        else:
-            (computed,) = dask.compute(next(gen))
-            return completion(computed)
+            return gathered, completion
+        return completion(gathered)
 
+    staged_imp.__doc__ = func.__doc__
+    staged_imp.__name__ = getattr(func, "__name__", "staged")
     return staged_imp

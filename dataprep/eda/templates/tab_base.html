@@ -1,13 +1,16 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 
 <head>
-    <title> {{ context.title }} </title>
+    {% include 'frame.html' %}
+    <title>{{ context.title|e }}</title>
     {% include 'tab_scripts.html' %}
     {% include 'tab_styles.html' %}
 </head>
 
 <body>
     <div class="container-{{ context.rnd }}">
+        {% include 'sample_note.html' %}
         <div class="tabs-{{ context.rnd }}">
             {% for title in context.meta %}
             <input type="radio" name="select" id="tab-{{ context.rnd }}-{{ loop.index }}" {{ 'checked' if loop.first }} onclick="switchTab{{ context.rnd }}(this)">
@@ -157,3 +160,4 @@
         </div>
     </div>
 </body>
+</html>

@@ -687,9 +687,16 @@
     }
 
     .pagination-{{ context.rnd }} {
-        text-align: center;
-        padding-top: 50px;
-        padding-bottom: 50px;
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        max-width: {{ context.container_width }}px;
+        padding-top: 30px;
+        padding-bottom: 30px;
+    }
+
+    .num-of-plots-{{ context.rnd }} {
+        max-width: {{ context.container_width }}px;
     }
 
     .pagination-button-{{ context.rnd }} {
@@ -712,16 +719,6 @@
 
     .pagination-button-{{ context.rnd }}:hover {
         cursor: pointer;
-    }
-
-    html {
-        display: table;
-        margin: left; {# Related to vscode display. See issue 896 #}
-    }
-
-    body {
-        display: table-cell;
-        vertical-align: middle;
     }
 
     input#num-per-page-{{ context.rnd }} {

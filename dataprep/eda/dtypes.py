@@ -1,30 +1,78 @@
 """
-In this module lives the type tree.
+The EDA type system.
+
+Every column handed to ``plot``, ``plot_missing``, ``create_report`` and friends is
+given one of the *semantic* types defined here. The semantic type, not the pandas
+dtype, decides which statistics are computed and which charts are drawn:
+
+==================  =====================================================
+Semantic type       Typical pandas columns
+==================  =====================================================
+``Continuous``      ints and floats with 10 or more distinct values
+``SmallCardNum``    ints and floats with fewer than 10 distinct values
+``Nominal``         strings, booleans, ``category``, ``Period``, mixed objects
+``DateTime``        ``datetime64`` columns (with or without a timezone)
+``GeoGraphy``       strings that are mostly country names or codes
+``GeoPoint``        strings/tuples that are mostly ``latitude, longitude`` pairs
+==================  =====================================================
+
+You can always override the detected type with the ``dtype`` argument, e.g.
+``plot(df, "zip_code", dtype={"zip_code": "nominal"})``.
 """
 
 from collections import defaultdict
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Type, Union
 
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-from ..clean import validate_country, validate_lat_long
-from ..errors import UnreachableError
 
-CATEGORICAL_NUMPY_DTYPES = [bool, object]
-CATEGORICAL_PANDAS_DTYPES = [pd.CategoricalDtype, pd.PeriodDtype]
-CATEGORICAL_DTYPES = CATEGORICAL_NUMPY_DTYPES + CATEGORICAL_PANDAS_DTYPES
+__all__ = [
+    "DType",
+    "Categorical",
+    "Nominal",
+    "Ordinal",
+    "Numerical",
+    "Continuous",
+    "SmallCardNum",
+    "Discrete",
+    "DateTime",
+    "Text",
+    "GeoGraphy",
+    "GeoPoint",
+    "LatLong",
+    "DTypeDef",
+    "detect_dtype",
+    "normalize_dtype",
+    "is_dtype",
+    "is_nominal",
+    "is_continuous",
+    "is_datetime",
+    "drop_null",
+    "NULL_VALUES",
+]
 
+_DECIMAL_COMMA = r"\s*[-+]?\d+,\d+\s*"
+
+# How many leading rows are inspected when sniffing for country / lat-long columns.
+GEO_SAMPLE_SIZE = 100
+# A column is "geo" when more than this share of the sampled values validates.
+GEO_THRESHOLD = 0.8
+# Numerical columns with fewer distinct values than this are plotted as categories.
+SMALL_CARDINALITY = 10
+
+# Kept for backwards compatibility with code that introspected these lists.
 STRING_PANDAS_DTYPES = [pd.StringDtype]
 STRING_DTYPES = STRING_PANDAS_DTYPES
-
+CATEGORICAL_NUMPY_DTYPES = [bool, object]
+CATEGORICAL_PANDAS_DTYPES = [pd.CategoricalDtype, pd.PeriodDtype]
+CATEGORICAL_DTYPES = CATEGORICAL_NUMPY_DTYPES + CATEGORICAL_PANDAS_DTYPES + STRING_DTYPES
 NUMERICAL_NUMPY_DTYPES = [np.number]
 NUMERICAL_DTYPES = NUMERICAL_NUMPY_DTYPES
-
 DATETIME_NUMPY_DTYPES = [np.datetime64]
 DATETIME_PANDAS_DTYPES = [pd.DatetimeTZDtype]
 DATETIME_DTYPES = DATETIME_NUMPY_DTYPES + DATETIME_PANDAS_DTYPES
 
+#: Strings that are treated as missing by :func:`drop_null`.
 NULL_VALUES = {
     float("NaN"),
     "#N/A",
@@ -49,322 +97,336 @@ NULL_VALUES = {
 
 
 class DType:
-    """
-    Root of Type Tree
-    """
+    """Root of the type tree."""
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
+    def __eq__(self, other: object) -> bool:
+        return type(self) is type(other) and self.__dict__ == other.__dict__
+
+    def __hash__(self) -> int:
+        return hash((type(self).__name__, tuple(sorted(self.__dict__.items()))))
 
 
 ############## Syntactic DTypes ##############
 class Categorical(DType):
-    """
-    Type Categorical
-    """
+    """A column whose values are labels."""
 
 
 class Nominal(Categorical):
-    """
-    Type Nominal, Subtype of Categorical
-    """
+    """Labels without an order, e.g. a product name."""
 
 
 class Ordinal(Categorical):
-    """
-    Type Ordinal, Subtype of Categorical
-    """
+    """Labels with an order, e.g. small / medium / large."""
 
 
 class Numerical(DType):
-    """
-    Type Numerical
-    """
+    """A column whose values are numbers."""
 
 
 class Continuous(Numerical):
-    """
-    Type Continuous, Subtype of Numerical
-    """
+    """Numbers measured on a scale, e.g. a price."""
+
+
+class SmallCardNum(Numerical):
+    """Numbers with only a handful of distinct values, plotted as categories."""
 
 
 class Discrete(Numerical):
-    """
-    Type Discrete, Subtype of Numerical
-    """
+    """Whole-number counts."""
 
 
 ############## Semantic DTypes ##############
-
-
 class DateTime(Numerical):
-    """
-    Type DateTime, Subtype of Numerical
-    """
+    """Timestamps."""
 
 
 class Text(Nominal):
-    """
-    Type Text, Subtype of Nominal
-    """
+    """Free text."""
 
 
 class GeoGraphy(Categorical):
-    """
-    Type GeoGraphy, Subtype of Categorical
-    """
+    """Country names or codes."""
 
 
 class GeoPoint(DType):
-    """
-    Type GeoPoint
-    """
+    """A latitude / longitude pair stored in one column."""
 
 
 class LatLong(GeoPoint):
-    """
-    Type LatLong, Tuple
+    """A latitude / longitude pair stored in two columns.
+
+    Examples
+    --------
+    >>> from dataprep.eda import plot
+    >>> from dataprep.eda.dtypes import LatLong
+    >>> plot(df, LatLong("lat", "lon"), "price")  # doctest: +SKIP
     """
 
     def __init__(self, lat_col: str, long_col: str) -> None:
         self.lat = lat_col
         self.long = long_col
 
+    def __repr__(self) -> str:
+        return f"LatLong({self.lat!r}, {self.long!r})"
+
 
 ############## End of the Type Tree ##############
 
 DTypeOrStr = Union[DType, Type[DType], str, None]
 DTypeDict = Union[Dict[str, Union[DType, Type[DType], str]], None]
-DTypeDef = Union[Dict[str, Union[DType, Type[DType], str]], DType, Type[DType], None]
+DTypeDef = Union[Dict[str, Union[DType, Type[DType], str]], DType, Type[DType], str, None]
 
-
-def detect_dtype(
-    col: dd.Series,
-    known_dtype: Optional[DTypeDef] = None,
-    detect_small_distinct: bool = True,
-) -> DType:
-    """
-    Given a column, detect its type or transform its type according to users' specification
-
-    Parameters
-    ----------
-    col: dask.datafram.Series
-        A dataframe column
-    known_dtype: Optional[Union[Dict[str, Union[DType, str]], DType]], default None
-        A dictionary or single DType given by users to specify the types for designated columns or
-        all columns. E.g.  known_dtype = {"a": Continuous, "b": "Nominal"} or
-        known_dtype = {"a": Continuous(), "b": "nominal"} or
-        known_dtype = Continuous() or known_dtype = "Continuous" or known_dtype = Continuous()
-    detect_small_distinct: bool, default True
-        Whether to detect numerical columns with small distinct values as categorical column.
-    """
-    if not known_dtype:
-        return detect_without_known(col, detect_small_distinct=detect_small_distinct)
-
-    if isinstance(known_dtype, dict):
-        if col.name in known_dtype:
-            dtype = normalize_dtype(known_dtype[col.name])
-            return map_dtype(dtype)
-
-    elif isinstance(normalize_dtype(known_dtype), DType):
-        return map_dtype(normalize_dtype(known_dtype))
-
-    return detect_without_known(col, detect_small_distinct=detect_small_distinct)
-
-
-def map_dtype(dtype: DType) -> DType:
-    """
-    Currently, we want to keep our Type System flattened.
-    We will map Categorical() to Nominal() and Numerical() to Continuous()
-    """
-    if (
-        isinstance(dtype, Categorical) is True
-        and isinstance(dtype, Ordinal) is False
-        and isinstance(dtype, Nominal) is False
-    ):
-        return Nominal()
-    elif (
-        isinstance(dtype, Numerical) is True
-        and isinstance(dtype, Continuous) is False
-        and isinstance(dtype, Discrete) is False
-    ):
-        return Continuous()
-    else:
-        return dtype
-
-
-def detect_without_known(col: dd.Series, detect_small_distinct: bool) -> DType:
-    # pylint: disable=too-many-return-statements
-    """
-    This function detects dtypes of column when users didn't specify.
-    """
-    if is_nominal(col.dtype):
-        if is_geography(col):
-            return GeoGraphy()
-        if is_geopoint(col):
-            return GeoPoint()
-        else:
-            return Nominal()
-
-    elif is_continuous(col.dtype):
-        if detect_small_distinct:
-            # detect as categorical if distinct value is small
-            nuniques = col.nunique_approx().compute()
-            if nuniques < 10:
-                return Nominal()
-            else:
-                return Continuous()
-        else:
-            return Continuous()
-
-    elif is_datetime(col.dtype):
-        return DateTime()
-    else:
-        raise UnreachableError
-
-
-def is_dtype(dtype1: Any, dtype2: DType) -> bool:
-    """
-    This function detects if dtype2 is dtype1.
-    """
-    return isinstance(dtype1, dtype2.__class__)
+_NAMED_DTYPES: Dict[str, Type[DType]] = {
+    "categorical": Categorical,
+    "ordinal": Ordinal,
+    "nominal": Nominal,
+    "numerical": Numerical,
+    "continuous": Continuous,
+    "discrete": Discrete,
+    "datetime": DateTime,
+    "text": Text,
+    "geography": GeoGraphy,
+    "geopoint": GeoPoint,
+    "smallcardnum": SmallCardNum,
+}
 
 
 def normalize_dtype(dtype_repr: Any) -> DType:
+    """Turn ``"nominal"``, ``Nominal`` or ``Nominal()`` into a ``Nominal()`` instance.
+
+    Raises
+    ------
+    ValueError
+        If ``dtype_repr`` does not name a known type.
     """
-    This function normalizes a dtype repr.
+    if isinstance(dtype_repr, DType):
+        return dtype_repr
+    if isinstance(dtype_repr, type) and issubclass(dtype_repr, DType):
+        return dtype_repr()
+    if isinstance(dtype_repr, str) and dtype_repr.lower() in _NAMED_DTYPES:
+        return _NAMED_DTYPES[dtype_repr.lower()]()
+
+    # Classes from a different copy of this module (e.g. after an autoreload)
+    # are matched by name so that user code keeps working.
+    name = getattr(dtype_repr, "__name__", type(dtype_repr).__name__).lower()
+    if name in _NAMED_DTYPES and not isinstance(dtype_repr, (str, int, float, bool)):
+        return _NAMED_DTYPES[name]()
+
+    known = ", ".join(sorted(cls.__name__ for cls in set(_NAMED_DTYPES.values())))
+    raise ValueError(f"Unknown dtype {dtype_repr!r}. Use one of: {known}.")
+
+
+def map_dtype(dtype: DType) -> DType:
+    """Flatten the type tree: ``Categorical`` -> ``Nominal``, ``Numerical`` -> ``Continuous``."""
+    if isinstance(dtype, Categorical) and not isinstance(dtype, (Ordinal, Nominal, GeoGraphy)):
+        return Nominal()
+    if isinstance(dtype, Ordinal):
+        # Ordinal columns are plotted the same way as nominal ones.
+        return Nominal()
+    if isinstance(dtype, Numerical) and not isinstance(
+        dtype, (Continuous, Discrete, DateTime, SmallCardNum)
+    ):
+        return Continuous()
+    if isinstance(dtype, Discrete):
+        return Continuous()
+    return dtype
+
+
+def _known_dtype_for(name: Any, known_dtype: Optional[DTypeDef]) -> Optional[DType]:
+    """Look up the user supplied type for column ``name``, if there is one."""
+    if known_dtype is None or (isinstance(known_dtype, dict) and not known_dtype):
+        return None
+    if isinstance(known_dtype, dict):
+        if name in known_dtype:
+            return map_dtype(normalize_dtype(known_dtype[name]))
+        if str(name) in known_dtype:
+            return map_dtype(normalize_dtype(known_dtype[str(name)]))
+        return None
+    return map_dtype(normalize_dtype(known_dtype))
+
+
+def detect_dtype(
+    col: pd.Series,
+    known_dtype: Optional[DTypeDef] = None,
+    *,
+    head: Optional[pd.Series] = None,
+    detect_small_distinct: bool = True,
+) -> DType:
+    """Detect the semantic type of a column, honouring a user supplied override.
+
+    Parameters
+    ----------
+    col
+        The column.
+    known_dtype
+        A single type applied to every column, or a ``{column name: type}`` dict.
+        A type can be given as a string (``"nominal"``), a class (``Nominal``) or an
+        instance (``Nominal()``).
+    head
+        The first rows of ``col``, used to sniff for geographic data. Computed from
+        ``col`` when omitted.
+    detect_small_distinct
+        Report numerical columns with fewer than 10 distinct values as
+        :class:`SmallCardNum` instead of :class:`Continuous`.
     """
-    normalized: DType
-    str_dic = {
-        "Categorical": Categorical,
-        "Ordinal": Ordinal,
-        "Nominal": Nominal,
-        "Numerical": Numerical,
-        "Continuous": Continuous,
-        "Discrete": Discrete,
-        "DateTime": DateTime,
-        "Text": Text,
-    }
-    for str_dtype, dtype in str_dic.items():
-        if isinstance(dtype_repr, str):
-            if dtype_repr.lower() == str_dtype.lower():
-                normalized = dtype()
-                break
-
-        elif isinstance(dtype_repr, dtype):
-            normalized = dtype_repr
-            break
-
-        elif dtype_repr == dtype:
-            normalized = dtype()
-            break
-
-    return normalized
+    col = _as_pandas(col)
+    known = _known_dtype_for(col.name, known_dtype)
+    if known is not None:
+        return known
+    return detect_without_known(col, head, detect_small_distinct=detect_small_distinct)
 
 
-def is_nominal(dtype: Any) -> bool:
-    """
-    Given a type, return if that type is a nominal type
-    """
+def detect_without_known(
+    col: pd.Series,
+    head: Optional[pd.Series] = None,
+    *,
+    detect_small_distinct: bool = True,
+) -> DType:
+    """Detect the semantic type of a column from its values alone."""
+    col = _as_pandas(col)
+    if is_continuous(col.dtype):
+        if detect_small_distinct and col.nunique(dropna=True) < SMALL_CARDINALITY:
+            return SmallCardNum()
+        return Continuous()
+    if is_datetime(col.dtype):
+        return DateTime()
 
-    if is_continuous(dtype) or is_datetime(dtype):
-        return False
-
-    if isinstance(dtype, np.dtype):
-        dtype = dtype.type
-
-        return any(issubclass(dtype, c) for c in CATEGORICAL_NUMPY_DTYPES)
-    else:
-        return any(isinstance(dtype, c) for c in CATEGORICAL_PANDAS_DTYPES)
+    if head is None:
+        head = col.head(GEO_SAMPLE_SIZE)
+    if is_geography(head):
+        return GeoGraphy()
+    if is_geopoint(head):
+        return GeoPoint()
+    return Nominal()
 
 
-def is_geography(col: dd.Series) -> bool:
-    """
-    Given a column, return if its type is a geography type
-    """
-    geo = col.compute()[:100]
-    geo_ratio: float = np.sum(validate_country(geo)) / geo.shape[0]
-    return geo_ratio > 0.8
-
-
-def is_geopoint(col: dd.Series) -> bool:
-    """
-    Given a column, return if its type is a geopoint type
-    """
-    lat_long = pd.Series(col.compute()[:100], dtype="string")
-    lat_long_ratio: float = np.sum(validate_lat_long(lat_long)) / lat_long.shape[0]
-    return lat_long_ratio > 0.8
+def is_dtype(dtype1: Any, dtype2: DType) -> bool:
+    """Whether ``dtype1`` is the same type as, or a sub-type of, ``dtype2``."""
+    return isinstance(dtype1, dtype2.__class__)
 
 
 def is_continuous(dtype: Any) -> bool:
-    """
-    Given a type, return if that type is a continuous type
-    """
-    dtype = dtype.type
-    return any(issubclass(dtype, c) for c in NUMERICAL_NUMPY_DTYPES)
+    """Whether a pandas/numpy dtype holds real numbers (bools and complex excluded)."""
+    if isinstance(dtype, pd.CategoricalDtype):
+        return False
+    return (
+        pd.api.types.is_numeric_dtype(dtype)
+        and not pd.api.types.is_bool_dtype(dtype)
+        and not pd.api.types.is_complex_dtype(dtype)
+    ) or pd.api.types.is_timedelta64_dtype(dtype)
 
 
 def is_datetime(dtype: Any) -> bool:
-    """
-    Given a type, return if that type is a datetime type
-    """
-    if isinstance(dtype, np.dtype):
-        dtype = dtype.type
-        return any(issubclass(dtype, c) for c in DATETIME_NUMPY_DTYPES)
-    else:
-        return any(isinstance(dtype, c) for c in DATETIME_PANDAS_DTYPES)
+    """Whether a pandas/numpy dtype holds timestamps."""
+    return pd.api.types.is_datetime64_any_dtype(dtype)
+
+
+def is_nominal(dtype: Any) -> bool:
+    """Whether a pandas/numpy dtype holds labels (strings, bools, categories, objects)."""
+    return not is_continuous(dtype) and not is_datetime(dtype)
 
 
 def is_pandas_categorical(dtype: Any) -> bool:
-    """
-    Detect if a dtype is categorical and from pandas.
-    """
-    return any(isinstance(dtype, c) for c in CATEGORICAL_PANDAS_DTYPES)
+    """Whether a dtype is a pandas ``category`` or ``Period`` dtype."""
+    return isinstance(dtype, (pd.CategoricalDtype, pd.PeriodDtype))
 
 
-def drop_null(
-    var: Union[dd.Series, pd.DataFrame, dd.DataFrame]
-) -> Union[pd.Series, dd.Series, pd.DataFrame, dd.DataFrame]:
-    """
-    Drop the null values (specified in NULL_VALUES) from a series or DataFrame
-    """
+def is_geography(head: pd.Series) -> bool:
+    """Whether most of the given values are country names or codes."""
+    head = _geo_sample(head)
+    if head is None:
+        return False
+    from ..clean import validate_country  # pylint: disable=import-outside-toplevel
 
-    if isinstance(var, (pd.Series, dd.Series)):
+    try:
+        valid = np.asarray(validate_country(head), dtype=bool)
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return bool(valid.sum() / len(head) > GEO_THRESHOLD)
+
+
+def is_geopoint(head: pd.Series) -> bool:
+    """Whether most of the given values are ``latitude, longitude`` pairs."""
+    head = _geo_sample(head)
+    if head is None:
+        return False
+    from ..clean import validate_lat_long  # pylint: disable=import-outside-toplevel
+
+    as_str = head.dropna().astype(object).map(str)
+    # "12,5" is far more likely a number written with a decimal comma than a
+    # coordinate pair, so columns made of such values are not geo points.
+    if len(as_str) and as_str.str.fullmatch(_DECIMAL_COMMA).mean() > 0.5:
+        return False
+
+    try:
+        valid = np.asarray(validate_lat_long(head.astype(object).map(str)), dtype=bool)
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return bool(valid.sum() / len(head) > GEO_THRESHOLD)
+
+
+def _geo_sample(head: pd.Series) -> Optional[pd.Series]:
+    """Prepare the sniffing sample. Returns None when the column cannot be geographic."""
+    head = _as_pandas(head).head(GEO_SAMPLE_SIZE)
+    if len(head) == 0 or pd.api.types.is_bool_dtype(head.dtype):
+        return None
+    if head.isna().all():
+        return None
+    return head
+
+
+def _as_pandas(col: Any) -> pd.Series:
+    """Materialise a lazy (e.g. dask) series; pandas series are returned untouched."""
+    if isinstance(col, pd.Series):
+        return col
+    if hasattr(col, "compute"):
+        return col.compute()
+    return pd.Series(col)
+
+
+def drop_null(var: Union[pd.Series, pd.DataFrame]) -> Union[pd.Series, pd.DataFrame]:
+    """Drop missing values, *including* the string spellings in :data:`NULL_VALUES`."""
+    if hasattr(var, "compute") and not isinstance(var, (pd.Series, pd.DataFrame)):
+        var = var.compute()
+
+    if isinstance(var, pd.Series):
         if is_datetime(var.dtype):
             return var.dropna()
-        return var[~var.isin(NULL_VALUES)]
+        return var[~(var.isna() | var.isin(NULL_VALUES))]
 
-    elif isinstance(var, (pd.DataFrame, dd.DataFrame)):
-        df = var
-        for values in df.columns:
-            if is_datetime(df[values].dtype):
-                df = df.dropna(subset=[values])
-            else:
-                df = df[~df[values].isin(NULL_VALUES)]
-        return df
+    if isinstance(var, pd.DataFrame):
+        keep = pd.Series(True, index=var.index)
+        for name in var.columns:
+            col = var[name]
+            keep &= ~col.isna() if is_datetime(col.dtype) else ~(col.isna() | col.isin(NULL_VALUES))
+        return var[keep]
 
-    raise ValueError("Input should be a Pandas/Dask Dataframe or Series")
+    raise ValueError("Input should be a pandas DataFrame or Series")
 
 
 def get_dtype_cnts_and_num_cols(
-    df: dd.DataFrame,
-    dtype: Union[Dict[str, Union[DType, Type[DType], str]], DType, Type[DType], None],
+    df: pd.DataFrame,
+    dtype: Optional[DTypeDef] = None,
 ) -> Tuple[Dict[str, int], List[str]]:
-    """
-    Get the count of each dtype in a dataframe
-    """
+    """Count the columns of each semantic type and list the continuous ones."""
     dtype_cnts: DefaultDict[str, int] = defaultdict(int)
     num_cols: List[str] = []
     for col in df.columns:
         col_dtype = detect_dtype(df[col], dtype)
-        if is_dtype(col_dtype, Nominal()):
+        if isinstance(col_dtype, (Nominal, SmallCardNum)):
             dtype_cnts["Categorical"] += 1
-        elif is_dtype(col_dtype, Continuous()):
+        elif isinstance(col_dtype, Continuous):
             dtype_cnts["Numerical"] += 1
             num_cols.append(col)
-        elif is_dtype(col_dtype, DateTime()):
+        elif isinstance(col_dtype, DateTime):
             dtype_cnts["DateTime"] += 1
-        elif is_dtype(col_dtype, GeoGraphy()):
+        elif isinstance(col_dtype, GeoGraphy):
             dtype_cnts["GeoGraphy"] += 1
-        elif is_dtype(col_dtype, GeoPoint()):
+        elif isinstance(col_dtype, GeoPoint):
             dtype_cnts["GeoPoint"] += 1
         else:
-            raise NotImplementedError
-    return dtype_cnts, num_cols
+            raise NotImplementedError(f"column {col!r} has unsupported type {col_dtype!r}")
+    return dict(dtype_cnts), num_cols

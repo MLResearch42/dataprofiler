@@ -3,7 +3,8 @@ Implement numerical minmax scaler.
 """
 
 from typing import Any, Union
-import dask.dataframe as dd
+
+import pandas as pd
 
 
 class MinmaxScaler:
@@ -24,8 +25,9 @@ class MinmaxScaler:
         self.name = "minmaxScaler"
         self.min = 0
         self.max = 0
+        self.range = 1
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Extract min value and max value for Minmax Scaler according to the provided column.
 
@@ -37,9 +39,13 @@ class MinmaxScaler:
 
         self.min = col_df.min()
         self.max = col_df.max()
+        self.range = self.max - self.min
+        # a constant column has no spread: it is scaled to 0 instead of dividing by zero
+        if not self.range > 0:
+            self.range = 1
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Transform the provided data column with the extracted min value and max value.
 
@@ -52,7 +58,7 @@ class MinmaxScaler:
         result = col_df.map(self.compute_val)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """ "
         Extract min value and max value for Minmax Scaler according to the provided column.
         Transform the provided data column with the extracted min value and max value.
@@ -75,4 +81,4 @@ class MinmaxScaler:
             Value should be scaled.
         """
 
-        return (val - self.min) / (self.max - self.min)
+        return (val - self.min) / self.range

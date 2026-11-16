@@ -2,9 +2,11 @@
 Implement numerical mean imputer.
 """
 
-from typing import Any, Union, List, Optional
-import math
-import dask.dataframe as dd
+from typing import Any, List, Optional, Union
+
+import pandas as pd
+
+from ...utils import in_null_values, is_missing
 
 
 class MeanImputer:
@@ -29,7 +31,7 @@ class MeanImputer:
         self.null_values = null_values
         self.mean = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Find the mean value for mean imputer according to the provided column.
 
@@ -39,10 +41,10 @@ class MeanImputer:
             Provided data column.
         """
 
-        self.mean = col_df.mean()
+        self.mean = pd.to_numeric(col_df, errors="coerce").mean()
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Impute missing values with the fitted mean value.
 
@@ -55,7 +57,7 @@ class MeanImputer:
         result = col_df.map(self.fillna)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Extract the mean value from provided column.
         Impute with extracted mean value.
@@ -77,11 +79,9 @@ class MeanImputer:
         Parameters
         ----------
         val
-            Each value in dask's Series
+            Each value in the pandas Series
         """
 
-        if isinstance(val, str) and val in self.null_values:
-            return self.mean
-        if math.isnan(float(val)):
+        if is_missing(val) or in_null_values(val, self.null_values):
             return self.mean
         return val

@@ -140,7 +140,7 @@ export default {
     let _this = this;
     console.log(_this.table_cols);
     /*axios
-        .post('http://localhost:7680/getFunctionParams', {
+        .post(endpoint.API_URL + 'getFunctionParams', {
           'clean_func': _this.clean_func,
         })
         .then(function(res){

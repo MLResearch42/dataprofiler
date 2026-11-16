@@ -2,15 +2,15 @@
 Intermediate class
 """
 
-from typing import Any, Dict, Tuple, Union, Optional
-
-from pathlib import Path
 import json
 import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, Union
+
 import numpy as np
 import pandas as pd
 
-from .dtypes_v2 import Continuous, Nominal, SmallCardNum
+from .dtypes import Continuous, Nominal, SmallCardNum
 
 
 class Intermediate(Dict[str, Any]):
@@ -115,7 +115,7 @@ class Intermediate(Dict[str, Any]):
                 ),
             ):
                 inter_dict[key] = int(inter_dict[key])
-            elif isinstance(inter_dict[key], (np.float_, np.float16, np.float32, np.float64)):
+            elif isinstance(inter_dict[key], (np.float16, np.float32, np.float64)):
                 inter_dict[key] = float(inter_dict[key])
             elif isinstance(inter_dict[key], (np.ndarray,)):
                 inter_dict[key] = inter_dict[key].tolist()

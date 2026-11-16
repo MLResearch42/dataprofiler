@@ -156,7 +156,8 @@ class ProgressBar(Callback):  # type: ignore
         ):
             warnings.warn(
                 "[ProgressBar] ProgressBar takes additional 10%+ of the computation time,"
-                " consider disable it by passing 'progress=False' to the plot function.",
+                " consider disabling it by passing progress=False.",
+                stacklevel=2,
             )
 
         self._state = None
