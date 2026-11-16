@@ -18,15 +18,15 @@ from bokeh.models import (
     HoverTool,
     LinearColorMapper,
     NumeralTickFormatter,
-    Panel,
     PrintfTickFormatter,
     Range1d,
+    TabPanel,
 )
-from bokeh.plotting import Figure
+from bokeh.plotting import figure
 
 from ...errors import UnreachableError
 from ..configs import Config
-from ..dtypes_v2 import Continuous, Nominal, GeoGraphy, SmallCardNum, drop_null, DateTime
+from ..dtypes import Continuous, DateTime, GeoGraphy, GeoPoint, Nominal, SmallCardNum
 from ..intermediate import ColumnMetadata, Intermediate
 from ..palette import CATEGORY10, CATEGORY20, GREYS256, RDBU
 from ..utils import cut_long_name, fuse_missing_perc, relocate_legend
@@ -50,7 +50,21 @@ def render_missing(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         raise UnreachableError
 
 
-def tweak_figure(fig: Figure) -> Figure:
+def _unique_labels(labels: List[str]) -> List[str]:
+    """Make axis labels unique (bokeh needs unique factors) by appending a counter."""
+    seen: Dict[str, int] = {}
+    out = []
+    for label in labels:
+        if label in seen:
+            seen[label] += 1
+            out.append(f"{label} ({seen[label]})")
+        else:
+            seen[label] = 0
+            out.append(label)
+    return out
+
+
+def tweak_figure(fig: figure) -> figure:
     """
     Set some common attributes for a figure
     """
@@ -70,7 +84,7 @@ def render_dist(
     typ: str,
     plot_width: int,
     plot_height: int,
-) -> Figure:
+) -> figure:
     """
     Render a distribution, CDF or PDF
     """
@@ -80,15 +94,17 @@ def render_dist(
         (typ.upper(), f"@{{{typ}}}"),
         ("Label", f"@{{{typ}}}_label"),
     ]
-    y_range = Range1d(0, df[typ].max() * 1.01)
-    x_range = Range1d(0, df[f"x_{typ}"].max() * 1.01)
+    y_range = Range1d(0, max(df[typ].max() * 1.01, 1e-12))
+    xmin, xmax = df[f"x_{typ}"].min(), df[f"x_{typ}"].max()
+    pad = (xmax - xmin) * 0.01 or 0.5
+    x_range = Range1d(xmin - pad, xmax + pad)
 
     fig = tweak_figure(
-        Figure(
+        figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             title=" ",
             tools="hover",
             toolbar_location=None,
@@ -117,22 +133,22 @@ def render_hist(
     plot_width: int,
     plot_height: int,
     show_legend: bool,
-) -> Figure:
+) -> figure:
     """
     Render a histogram
     """
     # pylint: disable=too-many-arguments
     # pylint: disable=too-many-locals
+    df = df.copy()
 
-    if isinstance(meta["dtype"], (Nominal, GeoGraphy, SmallCardNum, DateTime)):
+    if isinstance(meta["dtype"], (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime)):
         tooltips = [
             (x, "@x"),
             ("Count", "@count"),
             ("Label", "@label"),
         ]
     elif isinstance(meta["dtype"], Continuous):
-        df = df.copy()
-        df["repr"] = [f"[{row.lower_bound:.0f}~{row.upper_bound:.0f})" for row in df.itertuples()]
+        df["repr"] = [f"[{row.lower_bound:.4g}~{row.upper_bound:.4g})" for row in df.itertuples()]
 
         tooltips = [
             (x, "@repr"),
@@ -147,7 +163,7 @@ def render_hist(
     df["x"] = cols
     cmapper = CategoricalColorMapper(palette=CATEGORY10, factors=LABELS)
 
-    if isinstance(meta["dtype"], (Nominal, GeoGraphy, SmallCardNum, DateTime)):
+    if isinstance(meta["dtype"], (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime)):
         radius = 0.99
 
         # Inputs of FactorRange() have to be sequence of strings,
@@ -156,20 +172,21 @@ def render_hist(
         x_range = FactorRange(*df["x"].unique())
     elif isinstance(meta["dtype"], Continuous):
 
-        radius = df["x"][1] - df["x"][0]
+        radius = (df["upper_bound"] - df["lower_bound"]).iloc[0] if len(df) else 1.0
+        radius = radius if radius > 0 else 1.0
         x_range = Range1d(df["x"].min() - radius, df["x"].max() + radius)
     else:
         mtype = type(meta["dtype"])
         raise ValueError(f"unprocessed data type:{mtype}, col:{x}")
 
-    y_range = Range1d(0, df["count"].max() * 1.05)
+    y_range = Range1d(0, max(df["count"].max() * 1.05, 1) if len(df) else 1)
 
     fig = tweak_figure(
-        Figure(
+        figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             title=" " if show_legend else "",
             tools="hover",
             toolbar_location=None,
@@ -205,65 +222,49 @@ def render_hist(
     return fig
 
 
-def render_boxwhisker(df: pd.DataFrame, plot_width: int, plot_height: int) -> Figure:
+def render_boxwhisker(df: pd.DataFrame, plot_width: int, plot_height: int) -> figure:
     """
     Render a box-whisker plot
     """
 
     tooltips = [
         ("Upper", "@upper"),
-        ("75% Quantile", "@q1"),
+        ("75% Quantile", "@q3"),
         ("50% Quantile", "@q2"),
-        ("25% Quantile", "@q3"),
+        ("25% Quantile", "@q1"),
         ("Lower", "@lower"),
     ]
 
     fig = tweak_figure(
-        Figure(
-            x_range=df["label"].unique(),
-            plot_width=plot_width,
-            plot_height=plot_height,
+        figure(
+            x_range=list(df["label"].unique()),
+            width=plot_width,
+            height=plot_height,
             title=" ",
-            tools="",
+            tools="hover",
             toolbar_location=None,
             tooltips=tooltips,
         )
     )
 
     # stems
-    fig.segment(  # pylint: disable=too-many-function-args
-        "label", "q3", "label", "upper", source=df, line_color="black"
-    )
-    fig.segment(  # pylint: disable=too-many-function-args
-        "label", "q1", "label", "lower", source=df, line_color="black"
-    )
+    fig.segment(x0="label", y0="q3", x1="label", y1="upper", source=df, line_color="black")
+    fig.segment(x0="label", y0="q1", x1="label", y1="lower", source=df, line_color="black")
 
     # boxes
-    fig.vbar(  # pylint: disable=too-many-function-args
-        "label",
-        0.7,
-        "q2",
-        "q3",
-        source=df,
-        fill_color=CATEGORY20[0],
-        line_color="black",
-    )
-    fig.vbar(  # pylint: disable=too-many-function-args
-        "label",
-        0.7,
-        "q2",
-        "q1",
-        source=df,
-        fill_color=CATEGORY20[0],
-        line_color="black",
-    )
+    for top, bottom in (("q3", "q2"), ("q2", "q1")):
+        fig.vbar(
+            x="label",
+            width=0.7,
+            top=top,
+            bottom=bottom,
+            source=df,
+            fill_color=CATEGORY20[0],
+            line_color="black",
+        )
     # whiskers (almost-0 height rects simpler than segments)
-    fig.rect(  # pylint: disable=too-many-function-args
-        "label", "lower", 0.2, 0.01, source=df, line_color="black"
-    )
-    fig.rect(  # pylint: disable=too-many-function-args
-        "label", "upper", 0.2, 0.01, source=df, line_color="black"
-    )
+    for whisker in ("lower", "upper"):
+        fig.rect(x="label", y=whisker, width=0.2, height=0.01, source=df, line_color="black")
 
     # # outliers
     # if not out.empty:
@@ -314,30 +315,30 @@ def render_missing_impact(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 500
     plot_height = cfg.plot.height if cfg.plot.height is not None else 500
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
 
     if cfg.bar.enable:
         fig_barchart = render_bar_chart(itmdt["data_bars"], "linear", plot_width, plot_height)
-        tabs.append(Panel(child=row(fig_barchart), title="Bar Chart"))
+        tabs.append(TabPanel(child=row(fig_barchart), title="Bar Chart"))
         htgs["Bar Chart"] = cfg.bar.missing_how_to_guide(plot_height, plot_width)
 
     if cfg.spectrum.enable:
         fig_spectrum = render_missing_spectrum(
             itmdt["data_spectrum"], itmdt["data_total_missing"], plot_width, plot_height
         )
-        tabs.append(Panel(child=row(fig_spectrum), title="Spectrum"))
+        tabs.append(TabPanel(child=row(fig_spectrum), title="Spectrum"))
         htgs["Spectrum"] = cfg.spectrum.how_to_guide(plot_height, plot_width)
 
     if cfg.heatmap.enable:
         fig_heatmap = render_heatmaps(itmdt["data_heatmap"], plot_width, plot_height)
-        tabs.append(Panel(child=row(fig_heatmap), title="Heat Map"))
+        tabs.append(TabPanel(child=row(fig_heatmap), title="Heat Map"))
         htgs["Heat Map"] = cfg.heatmap.missing_how_to_guide(plot_height, plot_width)
 
     # itmdt["data_dendrogram"] is None when dataframe has only one column so that won't be displayed
     if cfg.dendro.enable and itmdt["ncols"] > 1:
         fig_dendrogram = render_dendrogram(itmdt["data_dendrogram"], plot_width, plot_height)
-        tabs.append(Panel(child=row(fig_dendrogram), title="Dendrogram"))
+        tabs.append(TabPanel(child=row(fig_dendrogram), title="Dendrogram"))
         htgs["Dendrogram"] = cfg.dendro.how_to_guide(plot_height, plot_width)
 
     if cfg.stats.enable:
@@ -348,26 +349,26 @@ def render_missing_impact(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         "tabledata": {"Missing Statistics": stat_dict} if cfg.stats.enable else {},
         "layout": [panel.child.children[0] for panel in tabs],
         "meta": [panel.title for panel in tabs],
-        "container_width": max([panel.child.children[0].plot_width for panel in tabs]),
+        "container_width": max([panel.child.children[0].width for panel in tabs]),
         "how_to_guide": htgs,
     }
 
 
-def render_heatmaps(data: Optional[pd.DataFrame], plot_width: int, plot_height: int) -> Figure:
+def render_heatmaps(data: Optional[pd.DataFrame], plot_width: int, plot_height: int) -> figure:
     """
     Render missing heatmaps in to tabs
     """
     tooltips = [("x", "@x"), ("y", "@y"), ("correlation", "@correlation{1.11}")]
     mapper, color_bar = create_color_mapper_heatmap(RDBU)
 
-    def empty_figure() -> Figure:
+    def empty_figure() -> figure:
         # If no data to render in the heatmap, i.e. no missing values
         # we render a blank heatmap
-        fig = Figure(
+        fig = figure(
             x_range=[],
             y_range=[],
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             x_axis_location="below",
             title=" ",
             tools="hover",
@@ -393,13 +394,13 @@ def render_heatmaps(data: Optional[pd.DataFrame], plot_width: int, plot_height: 
             df = df.unstack().reset_index(name="correlation")
             df = df.rename(columns={"level_0": "x", "level_1": "y"})
             df = df[df["x"] != df["y"]]
-            df = drop_null(df)
+            df = df.dropna(subset=["correlation"])
 
-            fig = Figure(
+            fig = figure(
                 x_range=x_range,
                 y_range=y_range,
-                plot_width=plot_width,
-                plot_height=plot_height,
+                width=plot_width,
+                height=plot_height,
                 x_axis_location="below",
                 tools="hover",
                 toolbar_location=None,
@@ -434,22 +435,23 @@ def render_bar_chart(
     yscale: str,
     plot_width: int,
     plot_height: int,
-) -> Figure:
+) -> figure:
     """
     Render a bar chart for the missing and present values
     """
     pres_cnts, null_cnts, cols = data
-    cols = [f"{col[:13]}...{col[len(col)-3:]}" if len(col) > 18 else col for col in cols]
+    cols = _unique_labels([cut_long_name(col) for col in cols])
     df = pd.DataFrame({"Present": pres_cnts, "Missing": null_cnts}, index=cols)
+    nrows = int(df["Present"].iloc[0] + df["Missing"].iloc[0]) if len(df) else 1
 
     if len(df) > 20:
         plot_width = 28 * len(df)
 
-    fig = Figure(
+    fig = figure(
         x_range=list(df.index),
-        y_range=[0, df["Present"][0] + df["Missing"][0]],
-        plot_width=plot_width,
-        plot_height=plot_height,
+        y_range=Range1d(0, max(nrows, 1)),
+        width=plot_width,
+        height=plot_height,
         y_axis_type=yscale,
         toolbar_location=None,
         tools=[],
@@ -466,7 +468,7 @@ def render_bar_chart(
     )
     # hover tool with count and percent
     formatter = CustomJSHover(
-        args=dict(source=ColumnDataSource(df)),
+        args={"source": ColumnDataSource(df)},
         code="""
         const columns = Object.keys(source.data)
         const cur_bar = special_vars.data_x - 0.5
@@ -504,18 +506,25 @@ def render_missing_spectrum(
     data_total_missing: pd.DataFrame,
     plot_width: int,
     plot_height: int,
-) -> Figure:
+) -> figure:
     """
     Render the missing specturm
     """
     mapper, color_bar = create_color_mapper()
     df = data_spectrum.copy()
 
-    df["column_with_perc"] = df["column"].apply(
-        lambda c: fuse_missing_perc(cut_long_name(c), data_total_missing[c])
+    uniq_cols = list(dict.fromkeys(df["column"]))
+    short = dict(
+        zip(
+            uniq_cols,
+            _unique_labels(
+                [fuse_missing_perc(cut_long_name(c), data_total_missing[c]) for c in uniq_cols]
+            ),
+        )
     )
+    df["column_with_perc"] = df["column"].map(short)
 
-    radius = (df["loc_end"][0] - df["loc_start"][0]) / 2
+    radius = (df["loc_end"].iloc[0] - df["loc_start"].iloc[0]) / 2
 
     if (df["loc_end"] - df["loc_start"]).max() <= 1:
         loc_tooltip = "@loc_start{1}"
@@ -535,11 +544,11 @@ def render_missing_spectrum(
         plot_width = 28 * df["column"].nunique()
 
     fig = tweak_figure(
-        Figure(
+        figure(
             x_range=x_range,
             y_range=y_range,
-            plot_width=plot_width,
-            plot_height=plot_height,
+            width=plot_width,
+            height=plot_height,
             x_axis_location="below",
             tools="hover",
             toolbar_location=None,
@@ -564,7 +573,7 @@ def render_missing_spectrum(
     return fig
 
 
-def render_dendrogram(dend: Dict["str", Any], plot_width: int, plot_height: int) -> Figure:
+def render_dendrogram(dend: Dict["str", Any], plot_width: int, plot_height: int) -> figure:
     """
     Render a missing dendrogram.
     """
@@ -575,9 +584,9 @@ def render_dendrogram(dend: Dict["str", Any], plot_width: int, plot_height: int)
     if len(cols) > 20:
         plot_width = 28 * len(cols)
 
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         toolbar_location=None,
         tools="",
         title=" ",
@@ -592,7 +601,7 @@ def render_dendrogram(dend: Dict["str", Any], plot_width: int, plot_height: int)
     h_lns_x = [coords[1:3] for coords in xs]
     h_lns_y = [coords[1:3] for coords in ys]
     null_mismatch_vals = [coord[0] for coord in h_lns_y]
-    source = ColumnDataSource(dict(x=h_lns_x, y=h_lns_y, n=null_mismatch_vals))
+    source = ColumnDataSource({"x": h_lns_x, "y": h_lns_y, "n": null_mismatch_vals})
     h_lns = fig.multi_line(xs="x", ys="y", source=source, line_color="#8073ac")
     hover_pts = HoverTool(
         renderers=[h_lns],
@@ -602,7 +611,7 @@ def render_dendrogram(dend: Dict["str", Any], plot_width: int, plot_height: int)
     fig.add_tools(hover_pts)
 
     # shorten column labels if necessary, and override coordinates with column names
-    cols = [f"{col[:16]}..." if len(col) > 18 else col for col in cols]
+    cols = [f"{col[:16]}..." if len(str(col)) > 18 else str(col) for col in cols]
     axis_coords = list(range(5, 10 * len(cols) + 1, 10))
     axis_overrides = dict(zip(axis_coords, cols))
     fig.xaxis.ticker = axis_coords
@@ -631,9 +640,9 @@ def render_missing_impact_1vn(itmdt: Intermediate, cfg: Config) -> Dict[str, Any
         title = f"Missing impact of {x} by {col}"
         fig = render_hist(df, col, meta[col], plot_width, plot_height, False)
         fig.frame_height = plot_height
-        panels.append(Panel(child=fig, title=col))
+        panels.append(TabPanel(child=fig, title=col))
 
-        if isinstance(meta[col]["dtype"], (Nominal, GeoGraphy, SmallCardNum, DateTime)):
+        if isinstance(meta[col]["dtype"], (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime)):
             htgs[title] = cfg.bar.grid_how_to_guide()
         elif isinstance(meta[col]["dtype"], Continuous):
             htgs[title] = cfg.hist.grid_how_to_guide()
@@ -668,19 +677,19 @@ def render_missing_impact_1v1(itmdt: Intermediate, cfg: Config) -> Dict[str, Any
 
         if cfg.hist.enable:
             fig = render_hist(itmdt["hist"], y, meta, plot_width, plot_height, True)
-            panels.append(Panel(child=fig, title="Histogram"))
+            panels.append(TabPanel(child=fig, title="Histogram"))
             htgs["Histogram"] = cfg.hist.how_to_guide(plot_height, plot_width)
         if cfg.pdf.enable:
             fig = render_dist(itmdt["dist"], y, "pdf", plot_width, plot_height)
-            panels.append(Panel(child=fig, title="PDF"))
+            panels.append(TabPanel(child=fig, title="PDF"))
             htgs["PDF"] = cfg.pdf.how_to_guide(plot_height, plot_width)
         if cfg.cdf.enable:
             fig = render_dist(itmdt["dist"], y, "cdf", plot_width, plot_height)
-            panels.append(Panel(child=fig, title="CDF"))
+            panels.append(TabPanel(child=fig, title="CDF"))
             htgs["CDF"] = cfg.cdf.how_to_guide(plot_height, plot_width)
         if cfg.box.enable:
             fig = render_boxwhisker(itmdt["box"], plot_width, plot_height)
-            panels.append(Panel(child=fig, title="Box Plot"))
+            panels.append(TabPanel(child=fig, title="Box Plot"))
             htgs["Box Plot"] = cfg.box.univar_how_to_guide(plot_height, plot_width)
 
         for panel in panels:
@@ -689,10 +698,10 @@ def render_missing_impact_1v1(itmdt: Intermediate, cfg: Config) -> Dict[str, Any
         return {
             "layout": [panel.child for panel in panels],
             "meta": [panel.title for panel in panels],
-            "container_width": max([panel.child.plot_width for panel in panels]),
+            "container_width": max([panel.child.width for panel in panels]),
             "how_to_guide": htgs,
         }
-    elif isinstance(meta["dtype"], (Nominal, SmallCardNum, GeoGraphy, DateTime)):
+    elif isinstance(meta["dtype"], (Nominal, SmallCardNum, GeoGraphy, GeoPoint, DateTime)):
         fig = render_hist(itmdt["hist"], y, meta, plot_width, plot_height, True)
         shown, total = meta["shown"], meta["total"]
         if shown != total:
@@ -703,7 +712,7 @@ def render_missing_impact_1v1(itmdt: Intermediate, cfg: Config) -> Dict[str, Any
         return {
             "layout": [fig],
             "meta": [_title],
-            "container_width": fig.plot_width,
+            "container_width": fig.width,
             "how_to_guide": htgs,
         }
     else:

@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ...eda import plot_diff
 from ...datasets import load_dataset
+from ...eda import plot_diff
 from ...eda.dtypes import Nominal
 from ...eda.utils import to_dask
 

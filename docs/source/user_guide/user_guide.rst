@@ -11,5 +11,4 @@ The User Guide introduces the components of the DataPrep library.
 
     datasets/introduction
     eda/introduction
-    connector/introduction
     clean/introduction

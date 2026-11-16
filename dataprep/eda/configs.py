@@ -20,9 +20,10 @@ the global parameter will be overwrote by local parameters for specific plots.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple, Union
-from pydantic import BaseModel, Field
-from ..utils import is_notebook
 
+from pydantic import BaseModel, Field
+
+from ..utils import is_notebook
 
 # This dictionary map the plot names in display to their canonicalized names in Config
 DISPLAY_MAP = {
@@ -1202,12 +1203,12 @@ class Config(BaseModel):
             # set all plots not in display list to enable=False except for Plot and Diff class
             valid_display = [DISPLAY_MAP[disp] for disp in display]
             for plot_name in set(all_plot_names) - set(valid_display) - {"plot"} - {"diff"}:
-                setattr(getattr(self, plot_name), "enable", False)
+                getattr(self, plot_name).enable = False
         except KeyError:
             # handle report config
             valid_display = [DISPLAY_REPORT_MAP[disp] for disp in display]
             for plot_name in set(DISPLAY_REPORT_MAP.values()) - set(valid_display):
-                setattr(getattr(self, plot_name), "enable", False)
+                getattr(self, plot_name).enable = False
 
     def _set_param_for_plot(
         self, plot_name: str, param: str, val: Any, raise_error_if_not_exists: bool
@@ -1237,8 +1238,8 @@ class Config(BaseModel):
             else:
                 # ngroups applies to "bars" and "slices" for the bar and pie charts
                 if param == "ngroups":
-                    setattr(getattr(self, "bar"), "bars", val)
-                    setattr(getattr(self, "pie"), "slices", val)
+                    self.bar.bars = val
+                    self.pie.slices = val
                 for plot_name in all_plot_names:
                     self._set_param_for_plot(plot_name, param, val, raise_error_if_not_exists=False)
 

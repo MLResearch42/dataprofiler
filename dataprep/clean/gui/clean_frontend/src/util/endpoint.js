@@ -1,5 +1,5 @@
-/* API endpoint for local temp used*/
-const API_URL = `http://${window.location.hostname}:7680/`;
+/* API endpoint: the backend that serves this page, whatever its port */
+const API_URL = `${window.location.origin}/`;
 export default {
     API_URL: API_URL,
 }

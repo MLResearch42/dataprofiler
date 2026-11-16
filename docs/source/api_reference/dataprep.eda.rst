@@ -2,6 +2,23 @@
 dataprep.eda auxiliary modules
 ==============================
 
+Summary statistics
+------------------
+
+.. automodule:: dataprep.eda.summary
+   :members: summarize, SUMMARY_COLUMNS
+
+Target analysis
+---------------
+
+.. automodule:: dataprep.eda.target
+   :members: rank_features, correlation_ratio, cramers_v, RANKING_COLUMNS
+
+Sampling
+--------
+
+.. autofunction:: dataprep.eda.eda_frame.sample_rows
+
 .. _dtypes:
 
 Data types
@@ -27,6 +44,12 @@ Palette
    :members:
    :undoc-members:
    :show-inheritance:
+
+Display and threads
+-------------------
+
+.. automodule:: dataprep.eda.parallel
+   :members: set_num_workers, get_num_workers
 
 Container
 ---------

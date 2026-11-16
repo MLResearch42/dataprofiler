@@ -1,14 +1,17 @@
 """Common used methods for plot function"""
 
-from typing import Union, Optional, Tuple, Dict
+from typing import Any, Dict, Optional, Tuple, Union
+
 import pandas as pd
-import dask.dataframe as dd
-from ...dtypes_v2 import LatLong
+
+from ...dtypes import LatLong
+from ...eda_frame import to_pandas
 
 
-def _gen_latlong(df: Union[pd.DataFrame, dd.DataFrame], x: LatLong) -> dd.Series:
+def _gen_latlong(df: pd.DataFrame, x: LatLong) -> pd.Series:
     """
-    Merge Latlong into one new column.
+    Merge the latitude and longitude columns into one new column of tuples.
+    Rows where either coordinate is missing become missing.
     """
 
     # Make sure the new column name is not contained
@@ -19,16 +22,18 @@ def _gen_latlong(df: Union[pd.DataFrame, dd.DataFrame], x: LatLong) -> dd.Series
         name = f"{name}_{i}"
         i += 1
 
-    lat_long = pd.Series(zip(df[x.lat], df[x.long]), name=name)
-    return lat_long
+    lat, long = df[x.lat], df[x.long]
+    missing = (lat.isna() | long.isna()).to_numpy()
+    pairs = [None if miss else pair for pair, miss in zip(zip(lat, long), missing)]
+    return pd.Series(pairs, name=name, index=df.index, dtype=object)
 
 
 def gen_new_df_with_used_cols(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: Any,
     x: Optional[Union[str, LatLong]] = None,
     y: Optional[Union[str, LatLong]] = None,
     z: Optional[str] = None,
-) -> Tuple[Dict[Optional[Union[str, LatLong]], Optional[str]], Union[pd.DataFrame, dd.DataFrame]]:
+) -> Tuple[Dict[Optional[Union[str, LatLong]], Optional[str]], pd.DataFrame]:
     """
     Keep only used columns in x, y, z, and gen new Latlong columns if any x, y, z is LatLong.
     """
@@ -38,37 +43,40 @@ def gen_new_df_with_used_cols(
     # Otherwise it's the generated column name.
     new_names: Dict[Optional[Union[str, LatLong]], Optional[str]] = {}
 
+    pd_df = to_pandas(df)
     if x is None and y is None and z is None:
-        return {}, df
+        return {}, pd_df
 
-    used_org_cols = set()
-    for col in (x, y, z):
-        if col is not None:
-            if isinstance(col, LatLong):
-                used_org_cols.add(col.lat)
-                used_org_cols.add(col.long)
-            else:
-                used_org_cols.add(col)
+    # Column labels may be non-strings in the user's frame while x, y, z are given
+    # as strings: look columns up by their string form.
+    by_str = {}
+    for pos, label in enumerate(pd_df.columns):
+        by_str.setdefault(str(label), pos)
 
-    if isinstance(df, dd.DataFrame):
-        pd_df = df[list(used_org_cols)].compute()
-    else:
-        pd_df = df[list(used_org_cols)]
+    def pick(name: str) -> pd.Series:
+        if name not in by_str:
+            raise KeyError(
+                f"Column {name!r} not found. Available columns: {list(by_str)[:20]}"
+                + (" ..." if len(by_str) > 20 else "")
+            )
+        srs = pd_df.iloc[:, by_str[name]]
+        return srs.rename(name)
 
     # new_srss is the used columns. It's dict because of avoid duplicate names
-    new_srss: Dict[Optional[Union[str, LatLong]], pd.Series] = {}
+    new_srss: Dict[str, pd.Series] = {}
     for col in (x, y, z):
         if isinstance(col, LatLong):
-            lat_long = _gen_latlong(pd_df, col)
+            both = pd.concat([pick(col.lat), pick(col.long)], axis="columns")
+            lat_long = _gen_latlong(both, col)
             new_names[col] = lat_long.name
             new_srss[lat_long.name] = lat_long
-            new_srss[col.lat] = pd_df[col.lat]
-            new_srss[col.long] = pd_df[col.long]
+            new_srss[col.lat] = both[col.lat]
+            new_srss[col.long] = both[col.long]
         else:
-            new_names[col] = col
+            new_names[col] = None if col is None else str(col)
             if col is not None:
-                new_srss[col] = pd_df[col]
+                new_srss[str(col)] = pick(str(col))
 
-    new_df = pd.concat(new_srss.values(), axis="columns")
+    new_df = pd.concat(list(new_srss.values()), axis="columns")
 
     return new_names, new_df

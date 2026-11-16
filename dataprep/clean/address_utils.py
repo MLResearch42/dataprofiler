@@ -4,15 +4,12 @@ Constants used by the clean_address() and validate_address() functions
 
 # pylint: disable=C0301, C0302, E1101
 
-from builtins import zip
-from builtins import str
-from typing import Any, Dict, List, Optional, Tuple
-from collections import OrderedDict
-import string
-import re
 import os
-import warnings
-import pycrfsuite
+import re
+import string
+import threading
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 
 TAG_MAPPING = {
     "OccupancyType": "apartment",
@@ -697,7 +694,7 @@ PARENT_LABEL = "AddressString"
 GROUP_LABEL = "AddressCollection"
 
 MODEL_FILE = "usaddr.crfsuite"
-MODEL_PATH = os.path.split(os.path.abspath(__file__))[0] + "/" + MODEL_FILE
+MODEL_PATH = os.path.join(os.path.split(os.path.abspath(__file__))[0], MODEL_FILE)
 
 DIRECTIONS = set(
     [
@@ -1312,20 +1309,45 @@ STREET_NAMES = {
 }
 
 
+_TAGGERS = threading.local()
+
+TOKEN_REGEX = re.compile(
+    r"""
+    \(*\b[^\s,;#&()]+[.,;)\n]*   # ['ab. cd,ef '] -> ['ab.', 'cd,', 'ef']
+    |
+    [#&]                       # [^'#abc'] -> ['#']
+    """,
+    re.VERBOSE | re.UNICODE,
+)
+
+
 def load_model() -> Any:
     """
-    Load address parsing model from local directory.
+    Load the address parsing model that ships with the package.
+
+    The model is opened once per thread and reused: a pycrfsuite Tagger keeps the
+    sequence being tagged as internal state, so it must not be shared between
+    threads. python-crfsuite is imported here so that it is only needed by the
+    address functions.
     """
-    tagger = None
-    try:
+    tagger = getattr(_TAGGERS, "tagger", None)
+    if tagger is None:
+        try:
+            import pycrfsuite  # pylint: disable=import-outside-toplevel
+        except ImportError as err:
+            raise ImportError(
+                "clean_address and validate_address require the python-crfsuite package. "
+                "Install it with: pip install python-crfsuite"
+            ) from err
+
+        if not os.path.isfile(MODEL_PATH):
+            raise FileNotFoundError(
+                f"The address parsing model {MODEL_FILE} is missing from the dataprep "
+                f"installation (expected at {MODEL_PATH})."
+            )
         tagger = pycrfsuite.Tagger()
         tagger.open(MODEL_PATH)
-    except IOError:
-        warnings.warn(
-            "You must train the model (parserator train --trainfile "
-            "FILES) to create the %s file before you can use the parse "
-            "and tag methods" % MODEL_FILE
-        )
+        _TAGGERS.tagger = tagger
     return tagger
 
 
@@ -1421,16 +1443,7 @@ def tokenize(address_string: str) -> Any:
     if isinstance(address_string, bytes):
         address_string = str(address_string, encoding="utf-8")
     address_string = re.sub("(&#38;)|(&amp;)", "&", address_string)
-    re_tokens = re.compile(
-        r"""
-    \(*\b[^\s,;#&()]+[.,;)\n]*   # ['ab. cd,ef '] -> ['ab.', 'cd,', 'ef']
-    |
-    [#&]                       # [^'#abc'] -> ['#']
-    """,
-        re.VERBOSE | re.UNICODE,
-    )
-
-    tokens = re_tokens.findall(address_string)
+    tokens = TOKEN_REGEX.findall(address_string)
 
     if not tokens:
         return []

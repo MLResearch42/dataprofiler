@@ -2,22 +2,22 @@
     This module for testing config parameter
 """
 
-import dask.dataframe as dd
-import pandas as pd
-import numpy as np
 import random
+
+import dask.dataframe as dd
+import numpy as np
+import pandas as pd
 import pytest
 
 from ...eda import (
-    plot,
-    plot_correlation,
-    plot_missing,
     compute,
     compute_correlation,
     compute_missing,
     create_report,
+    plot,
+    plot_correlation,
+    plot_missing,
 )
-from ...eda.configs import Config
 from ...eda.utils import to_dask
 
 

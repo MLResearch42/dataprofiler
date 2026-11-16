@@ -2,8 +2,9 @@
 Implement numerical scaler component.
 """
 
-from typing import Any, Tuple, Dict
-import dask.dataframe as dd
+from typing import Any, Dict, Tuple
+
+import pandas as pd
 
 from .num_scaling import operator_dic
 
@@ -37,7 +38,7 @@ class NumScaler:
         else:
             self.scaler = num_pipe_info["num_scaling"]()
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Fit the parameters for scaler according to the provided column.
 
@@ -49,7 +50,7 @@ class NumScaler:
         self.scaler.fit(col_df)
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Transform the provided data column with the fitted parameters.
 
@@ -62,8 +63,8 @@ class NumScaler:
         return self.scaler.transform(col_df)
 
     def fit_transform(
-        self, training_df: dd.Series, test_df: dd.Series
-    ) -> Tuple[dd.Series, dd.Series]:
+        self, training_df: pd.Series, test_df: pd.Series
+    ) -> Tuple[pd.Series, pd.Series]:
         """
         Fit the parameters for scaler according to the training data column.
         Transform training data column and test data column with fitted parameters.

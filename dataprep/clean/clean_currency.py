@@ -4,28 +4,28 @@ Clean and validate a DataFrame column containing currencies
 
 # pylint: disable=too-many-arguments, line-too-long, too-many-locals, too-many-branches, too-many-statements, too-many-return-statements,
 
+from __future__ import annotations
+
 import json
+from functools import cache, partial
 from os import path
-from operator import itemgetter
-from typing import Any, List, Union, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
-
-import dask
-import dask.dataframe as dd
-
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from ..progress_bar import ProgressBar
 from .utils import (
-    NULL_VALUES,
-    create_report_new,
-    to_dask,
-    _get_data,
-    _get_crypto_symbol_and_id,
     _get_rate,
     _get_rate_crypto,
+    clean_column,
+    create_report_new,
+    is_dask,
+    is_null,
+    validate_values,
 )
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 CURRENCIES_DATA_FILE = path.join(path.split(path.abspath(__file__))[0], "currencies.json")
@@ -36,7 +36,7 @@ CRYPTO_BASE_URL = "api.coingecko.com"
 
 
 def clean_currency(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     n_round: int = 2,
     input_currency: str = "usd",
@@ -49,11 +49,16 @@ def clean_currency(
     inplace: bool = False,
     report: bool = True,
     progress: bool = False,
-) -> Union[pd.DataFrame, dd.DataFrame]:
+) -> pd.DataFrame:
     """
     Clean, standardize and convert currencies.
 
-    Read more in the :ref:`User Guide <ip_userguide>`.
+    Read more in the :ref:`User Guide <currency_userguide>`.
+
+    Cleaning a column never needs internet access. Converting to another currency
+    (``target_currency``) needs an exchange rate: pass it with ``user_rate`` to work
+    offline, otherwise the latest rate is requested from an online service and a
+    ``RatesNotAvailableError`` is raised if the service cannot be reached.
 
     Parameters
     ----------
@@ -63,32 +68,41 @@ def clean_currency(
         The name of the column containing currencies
     n_round
         Round a float to given number of decimals
+
+        (default: 2)
     input_currency
         Name of the input currency
             - For fiat currencies use the 3 letter abbreviation. Eg. "usd", "inr", etc.
-            - For cyrptocurrencies use the full name of the coin. Eg "Binance Coin", "ethereum", etc.
+            - For cryptocurrencies use the full name of the coin. Eg "Binance Coin", "ethereum".
+
+        (default: "usd")
     target_currency
         Optional Parameter - Name of the output currency.
-                - For fiat currencies use the 3 letter abbreviation. Eg. "usd", "inr", etc.
-                - For cyrptocurrencies use the full name of the coin. Eg "Binance Coin", "ethereum", etc.
-        (default : None)
-    target_representation:
+            - For fiat currencies use the 3 letter abbreviation. Eg. "usd", "inr", etc.
+            - For cryptocurrencies use the full name of the coin. Eg "Binance Coin", "ethereum".
+
+        (default: None)
+    target_representation
         The desired format in which the result would be displayed.
             - 'decimal' (floating point number)
-            - 'abbreviation' (string with comma seprated values)
-    user_rate:
-        Optional parameter - user defined exchange rate
+            - 'abbr' (string with comma separated thousands)
 
-        (default : None)
-    symbol:
-        Optional parameter - A list of string provided by user that the parser will ignore
+        (default: 'decimal')
+    user_rate
+        Optional parameter - user defined exchange rate. If it is given, no exchange
+        rate is requested from the internet.
 
-        (default : None)
+        (default: None)
+    ignore_symbol
+        Optional parameter - A string or list of strings (e.g. currency symbols) that the
+        parser removes from the values before parsing them.
+
+        (default: None)
     errors
         How to handle parsing errors.
-            - ‘coerce’: invalid parsing will be set to NaN.
-            - ‘ignore’: invalid parsing will return the input.
-            - ‘raise’: invalid parsing will raise an exception.
+            - 'coerce': invalid parsing will be set to NaN.
+            - 'ignore': invalid parsing will return the input.
+            - 'raise': invalid parsing will raise an exception.
 
         (default: 'coerce')
     split
@@ -106,24 +120,23 @@ def clean_currency(
 
         (default: True)
     progress
-        If True, enable the progress bar.
+        If True, enable the progress bar. Only shown for Dask DataFrames.
 
-        (default: True)
-
+        (default: False)
 
     Examples
     --------
 
     >>> df = pd.DataFrame({'currencies': [234.56, 18790, '234,456.45']})
-    >>> clean_currency(df, 'currencies', input_currency='INR', target_currency='USD')
+    >>> clean_currency(df, 'currencies', input_currency='INR', target_currency='USD',
+    ...                user_rate=0.0133)
     Currency Cleaning Report:
-            3 values cleaned (100.0%)
+    \t3 values cleaned (100.0%)
     Result contains 3 (100.0%) values in the correct format and 0 null values (0.0%)
-    currencies  currencies_clean
+       currencies  currencies_clean
     0      234.56              3.12
     1       18790            249.91
     2  234,456.45           3118.27
-
     """
 
     _check_params(
@@ -142,96 +155,64 @@ def clean_currency(
         progress=progress,
     )
 
-    # defining some variables here because of scoping issues
     target_symbol = ""
-    input_symbol = ""
     conversion_rate = 1.0
     conversion_type = ""
 
+    input_currency = input_currency.lower()
     if target_currency is not None:
-        # cryptocurrency data takes lower case values
-        input_currency = input_currency.lower()
         target_currency = target_currency.lower()
-
         conversion_type = _detect_conversion_type(input_currency, target_currency)
-
-        input_symbol, target_symbol, conversion_rate = _get_conversion_rates_and_symbols(
-            input_currency=input_currency,
-            target_currency=target_currency,
-            conversion_type=conversion_type,
+        input_symbol, target_symbol = _get_symbols(input_currency, target_currency, conversion_type)
+        # a rate supplied by the user means that no internet access is needed
+        conversion_rate = (
+            user_rate
+            if user_rate is not None
+            else _get_conversion_rate(input_currency, target_currency, conversion_type)
         )
     else:
-        input_symbol = _get_conversion_rates_and_symbols(input_currency=input_currency)
+        input_symbol = _get_input_symbol(input_currency)
+        if user_rate is not None:
+            conversion_rate = user_rate
 
-    # finally if `user_rate` is defined, set it to conversion rate
-    if user_rate is not None:
-        conversion_rate = user_rate
+    ignore_symbols = [ignore_symbol] if isinstance(ignore_symbol, str) else ignore_symbol
+    has_target = target_currency is not None
 
-    df = to_dask(df)
+    if not split:
+        new_columns = [f"{column}_clean"]
+    elif has_target:
+        new_columns = [
+            "input_currency_symbol",
+            f"{column}_clean",
+            "conversion_rate",
+            "target_symbol",
+            "target_val",
+        ]
+    else:
+        new_columns = ["input_currency_symbol", f"{column}_clean"]
 
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [
-            _format_currency(
-                val=x,
-                ignore_symbol=ignore_symbol,
-                n_round=n_round,
-                errors=errors,
-                target_representation=target_representation,
-                target_symbol=target_symbol,
-                input_symbol=input_symbol,
-                conversion_rate=conversion_rate,
-                conversion_type=conversion_type,
-                split=split,
-            )
-            for x in srs
-        ],
-        meta=object,
+    df, stats = clean_column(
+        df,
+        column,
+        partial(
+            _format_currency,
+            ignore_symbol=ignore_symbols,
+            n_round=n_round,
+            errors=errors,
+            target_representation=target_representation,
+            input_symbol=input_symbol.upper(),
+            split=split,
+            conversion_rate=conversion_rate,
+            conversion_type=conversion_type,
+            target_symbol=target_symbol.upper(),
+            has_target=has_target,
+        ),
+        new_columns,
+        inplace=inplace,
+        progress=progress,
     )
 
-    if split:
-        if target_currency is not None:
-            df = df.assign(
-                input_currency_symbol=df["clean_code_tup"].map(itemgetter(0)),
-                _temp_=df["clean_code_tup"].map(itemgetter(1)),
-                conversion_rate=df["clean_code_tup"].map(itemgetter(2)),
-                target_symbol=df["clean_code_tup"].map(
-                    itemgetter(3), meta=("target_symbol", object)
-                ),
-                target_val=df["clean_code_tup"].map(itemgetter(4), meta=("target_val", object)),
-                _code_=df["clean_code_tup"].map(itemgetter(5), meta=("_code_", object)),
-            )
-        else:
-            df = df.assign(
-                input_currency_symbol=df["clean_code_tup"].map(itemgetter(0)),
-                _temp_=df["clean_code_tup"].map(itemgetter(1)),
-                _code_=df["clean_code_tup"].map(itemgetter(2), meta=("_code_", object)),
-            )
-
-    else:
-        # TODO - apply the condition where no split and target currency is specified.
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-        )
-
-    df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
-
-    # output a report describing the result of clean_ip
+    # output a report describing the result of clean_currency
     if report:
         create_report_new("Currency", stats, errors)
 
@@ -240,7 +221,7 @@ def clean_currency(
 
 def _format_currency(
     val: Any,
-    ignore_symbol: Optional[Union[List[str], str]],
+    ignore_symbol: Optional[List[str]],
     n_round: int,
     errors: str,
     target_representation: str,
@@ -249,109 +230,105 @@ def _format_currency(
     conversion_rate: float,
     conversion_type: str,
     target_symbol: str,
+    has_target: bool = False,
 ) -> Any:
     """
-    Formats each values and returns it the specified format
+    Formats a value and returns it in the specified format, followed by a code
+    describing how the value was handled:
+        0 := the value is null
+        1 := the value could not be parsed
+        2 := the value was cleaned
     """
-
-    # check whether valid format or not
-    # if not return according to errors paramter
-    if isinstance(ignore_symbol, str):
-        ignore_symbol = [ignore_symbol]
-    val, status = _check_currency(val, ignore_symbol, True)
-
-    input_symbol = input_symbol.upper()
-    target_symbol = target_symbol.upper()
-
-    if val is not None:
-        val, val_new = _get_values_target_representation(
-            val=val,
-            target_representation=target_representation,
-            conversion_type=conversion_type,
-            conversion_rate=conversion_rate,
-            n_round=n_round,
-            split=split,
-            input_symbol=input_symbol,
-            target_symbol=target_symbol,
-        )
-
-    if split:
-        if status == "null":
-            return (np.nan, np.nan, np.nan, np.nan, np.nan, 0)
-        elif status == "unknown":
-            if errors == "raise":
-                raise ValueError(f"Unable to parse value {val}")
-            return (
-                (np.nan, val, np.nan, np.nan, np.nan, 1)
-                if errors == "ignore"
-                else (np.nan, np.nan, np.nan, np.nan, np.nan, 1)
-            )
-        else:
-            if target_symbol != "null":
-                return (input_symbol, val, conversion_rate, target_symbol, val_new, 2)
-            else:
-                return (input_symbol, val, 2)
-
+    # pylint: disable=too-many-arguments
+    if not split:
+        width = 1
     else:
-        if status == "null":
-            return np.nan, 0
+        width = 5 if has_target else 2
 
-        if status == "unknown":
-            if errors == "raise":
-                raise ValueError(f"Unable to parse value {val}")
-            return val if errors == "ignore" else np.nan, 1
-        else:
-            if target_symbol != "null":
-                return val_new, 2
-            else:
-                return val, 2
+    number, status = _check_currency(val, ignore_symbol, True)
+
+    if status == "null":
+        return (np.nan,) * width + (0,)
+
+    if status == "unknown":
+        if errors == "raise":
+            raise ValueError(f"Unable to parse value {val}")
+        result = val if errors == "ignore" else np.nan
+        if not split:
+            return result, 1
+        return (np.nan, result) + (np.nan,) * (width - 2) + (1,)
+
+    amount, converted = _get_values_target_representation(
+        val=number,
+        target_representation=target_representation,
+        conversion_type=conversion_type,
+        conversion_rate=conversion_rate,
+        n_round=n_round,
+        split=split,
+        input_symbol=input_symbol,
+        target_symbol=target_symbol,
+    )
+
+    if not split:
+        return converted, 2
+    if has_target:
+        return input_symbol, amount, conversion_rate, target_symbol, converted, 2
+    return input_symbol, amount, 2
 
 
 def validate_currency(
     x: Union[str, pd.Series], symbol: Optional[Union[List[str], str]] = None
 ) -> Union[bool, pd.Series]:
     """
-    This function validates currencies
+    Validate currency values: a value is valid if it is a number once the
+    thousands separators and the given symbols are removed.
+
     Parameters
     ----------
     x
-        pandas Series of currencies or currency instance
+        pandas Series of currencies or a single value.
+    symbol
+        A string or list of strings (e.g. currency symbols) that are removed from
+        the values before checking them.
+
+    Examples
+    --------
+    >>> validate_currency("1,234.50")
+    True
+    >>> validate_currency("$1,234.50")
+    False
+    >>> validate_currency("$1,234.50", symbol="$")
+    True
     """
-
-    if isinstance(x, pd.Series):
-        return x.apply(_check_currency, args=[symbol, False])
-    else:
-        return _check_currency(x, symbol, False)
+    symbols = [symbol] if isinstance(symbol, str) else symbol
+    return validate_values(x, partial(_check_currency, symbol=symbols, clean=False))
 
 
-def _check_currency(
-    val: Union[str, Any], symbol: Optional[Union[List[str], str]], clean: bool
-) -> Any:
+def _check_currency(val: Union[str, Any], symbol: Optional[List[str]], clean: bool) -> Any:
     """
     Function to check whether a value is a valid currency
     """
+    if is_null(val):
+        return (None, "null") if clean else False
 
     if symbol is None:
         symbol = []
 
+    text = str(val).replace(",", "")
+
+    # strip symbols from the left and right of the value
+    for s_s in symbol:
+        text = text.strip(s_s)
+
+    text = "".join(c for c in text if (c.isdigit() or c == "." or c not in symbol))
+
     try:
-        if val in NULL_VALUES:
-            return (None, "null") if clean else False
-        val = str(val)
-        val = val.replace(",", "")
-
-        ## strip symbols
-        for s_s in symbol:
-            val = val.strip(s_s)
-
-        val = "".join(c for c in val if (c.isdigit() or c == "." or c not in symbol))
-
-        if float(val):
-            return (val, "success") if clean else True
-        else:
-            return (None, "unknown") if clean else False
-    except (TypeError, ValueError):
+        number = float(text)
+    except ValueError:
         return (None, "unknown") if clean else False
+    if number != number:  # pylint: disable=comparison-with-itself
+        return (None, "unknown") if clean else False
+    return (text, "success") if clean else True
 
 
 def _get_values_target_representation(
@@ -368,12 +345,11 @@ def _get_values_target_representation(
     Returns the value of the converted currency in the specified format.
     The two formats specified are "abbr", "decimal".
     """
-
-    val_new = 0.0
+    # pylint: disable=too-many-arguments
     val = float(val)
 
-    #   1. for fiat-to-fiat and crypto-to-fiat we multiply
-    #   2. for fiat-to-crypto we divide
+    # 1. for fiat-to-fiat and crypto-to-fiat we multiply
+    # 2. for fiat-to-crypto we divide
 
     if conversion_type in ("fiat_to_fiat", "crypto_to_fiat"):
         val_new = val * conversion_rate
@@ -381,14 +357,12 @@ def _get_values_target_representation(
         val_new = val / conversion_rate
 
     if target_representation == "abbr":
-        val = "{:,.{a}f}".format(val, a=n_round)
-        target_val = "{:,.{a}f}".format(val_new, a=n_round)
+        val_abbr = f"{val:,.{n_round}f}"
+        target_val = f"{val_new:,.{n_round}f}"
         if split:
-            return val, target_val
-        else:
-            return input_symbol.upper() + str(val), target_symbol.upper() + str(target_val)
-    else:
-        return np.round(val, n_round), np.round(val_new, n_round)
+            return val_abbr, target_val
+        return input_symbol.upper() + val_abbr, target_symbol.upper() + target_val
+    return float(np.round(val, n_round)), float(np.round(val_new, n_round))
 
 
 def _check_params(
@@ -409,7 +383,7 @@ def _check_params(
     """
     Checks whether the params passed by the end user is of the correct data type
     """
-    if not isinstance(df, (pd.DataFrame, dd.DataFrame)):
+    if not isinstance(df, pd.DataFrame) and not (is_dask(df) and hasattr(df, "columns")):
         raise ValueError("df is invalid, it needs to be a pandas or Dask DataFrame")
 
     if not isinstance(column, str):
@@ -424,9 +398,10 @@ def _check_params(
     if target_currency is not None and not isinstance(target_currency, str):
         raise ValueError(f"target_currency {target_currency} is invalid, it needs to be a string")
 
-    if not isinstance(target_representation, str):
+    if target_representation not in {"decimal", "abbr"}:
         raise ValueError(
-            f"target_representation {target_representation} is invalid, it needs to be a string"
+            f"target_representation {target_representation} is invalid, "
+            'it needs to be "decimal" or "abbr"'
         )
 
     if ignore_symbol is not None and not isinstance(ignore_symbol, (list, str)):
@@ -446,106 +421,106 @@ def _check_params(
     if not isinstance(progress, bool):
         raise ValueError(f"progress {progress} is invalid, it needs to be a boolean")
 
-    if user_rate is not None and not isinstance(user_rate, (int, float)):
-        raise ValueError(f"user_rate {user_rate} is invalid, it needs to be a boolean")
+    if user_rate is not None and (
+        isinstance(user_rate, bool) or not isinstance(user_rate, (int, float)) or user_rate == 0
+    ):
+        raise ValueError(f"user_rate {user_rate} is invalid, it needs to be a non-zero number")
 
     if errors not in {"coerce", "ignore", "raise"}:
         raise ValueError(f'errors {errors} is invalid, it needs to be "coerce", "ignore", "raise"')
 
 
-def _get_dictionary_from_json(path: str) -> Any:
+@cache
+def _get_dictionary_from_json(file_path: str) -> Any:
     """
     Utility function to load a json file and return it as a dictionary
     """
-    with open(path) as f:
+    with open(file_path, encoding="utf-8") as f:
         return json.loads(f.read())
+
+
+def _fiat_symbols() -> dict[str, str]:
+    """
+    Returns the mapping of each (lower-case) fiat currency code to its symbol.
+    """
+    return {
+        item["cc"].lower(): item.get("symbol") or item["cc"]
+        for item in _get_dictionary_from_json(CURRENCIES_DATA_FILE)
+    }
+
+
+def _crypto_data() -> dict[str, list[str]]:
+    """
+    Returns the mapping of each cryptocurrency name to its [id, symbol].
+    """
+    data: dict[str, list[str]] = _get_dictionary_from_json(CRYPTOCURRENCIES_DATA_FILE)
+    return data
 
 
 def _detect_conversion_type(input_currency: str, target_currency: str) -> str:
     """
-    detects the conversion type based upon the input and target currencies
+    This function detects the type of conversion that is to be performed. There are 3 types
+    of conversions that are supported
 
-    conversion type can be of 4 types:
-       1. fiat to fiat
-       2. fiat to cypto
-       3. crypto  to fiat
-       4. crypto to crypto (need to confirm whether is supported or not)
+    1. Fiat to Fiat
+    2. Fiat to Cryptocurrency
+    3. Cryptocurrency to Fiat
     """
+    fiat = _fiat_symbols()
+    crypto = _crypto_data()
 
-    cryptocurrency_dict = _get_dictionary_from_json(CRYPTOCURRENCIES_DATA_FILE)
-    currency_dict = _get_dictionary_from_json(CURRENCIES_DATA_FILE)
-
-    currency_list = [x["cc"].lower() for x in currency_dict]
-
-    if (input_currency in currency_list) and (target_currency in currency_list):
-        conversion_type = "fiat_to_fiat"
-
-    elif (input_currency in currency_list) and (target_currency in cryptocurrency_dict):
-        conversion_type = "fiat_to_crypto"
-
-    elif (input_currency in cryptocurrency_dict) and (target_currency in currency_list):
-        conversion_type = "crypto_to_fiat"
-
-    elif (input_currency in cryptocurrency_dict) and (target_currency in cryptocurrency_dict):
+    if input_currency in fiat and target_currency in fiat:
+        return "fiat_to_fiat"
+    if input_currency in fiat and target_currency in crypto:
+        return "fiat_to_crypto"
+    if input_currency in crypto and target_currency in fiat:
+        return "crypto_to_fiat"
+    if input_currency in crypto and target_currency in crypto:
         raise ValueError("Currently we do not support crypto to crypto conversion")
-
-    else:
-        raise ValueError("Please check your input and target currencies")
-
-    return conversion_type
+    raise ValueError("Please check your input and target currencies")
 
 
-def _get_conversion_rates_and_symbols(
-    input_currency: str,
-    target_currency: Optional[str] = None,
-    conversion_type: Optional[str] = None,
-) -> Any:
+def _get_input_symbol(input_currency: str) -> str:
     """
-    The function that returns the symbols and conversion rates as following:
-        1. if `target_currency` is specified then it returns `input_symbol`, `target_symbol` and `conversion`
-        2. if no `target_currency` is specified then it returns only `input symbol`
+    Returns the symbol of a fiat currency (3 letter code) or cryptocurrency (full name).
     """
+    crypto = _crypto_data()
+    if input_currency in crypto:
+        return crypto[input_currency][1]
+    fiat = _fiat_symbols()
+    if input_currency in fiat:
+        return fiat[input_currency]
+    raise ValueError(
+        f"input_currency {input_currency} is not a known currency. Use the 3 letter code "
+        "of a fiat currency (e.g. 'usd') or the full name of a cryptocurrency (e.g. 'bitcoin')."
+    )
 
-    target_symbol = ""
-    input_symbol = ""
 
-    cryptocurrency_data = _get_dictionary_from_json(CRYPTOCURRENCIES_DATA_FILE)
+def _get_symbols(input_currency: str, target_currency: str, conversion_type: str) -> tuple[str, str]:
+    """
+    Returns the symbols of the input and target currencies. No internet access is needed.
+    """
+    fiat = _fiat_symbols()
+    crypto = _crypto_data()
+    if conversion_type == "fiat_to_fiat":
+        return fiat[input_currency], fiat[target_currency]
+    if conversion_type == "fiat_to_crypto":
+        return fiat[input_currency], crypto[target_currency][1]
+    return crypto[input_currency][1], fiat[target_currency]
 
-    if target_currency is not None:
-        if conversion_type == "fiat_to_fiat":
-            input_currency = input_currency.upper()
-            target_currency = target_currency.upper()
-            input_symbol, _ = _get_data(input_currency, CURRENCIES_DATA_FILE)
-            target_symbol, _ = _get_data(target_currency, CURRENCIES_DATA_FILE)
-            conversion_rate = _get_rate(input_currency, target_currency, FIAT_BASE_URL)
 
-        elif conversion_type == "fiat_to_crypto":
-            input_symbol, _ = _get_data(input_currency.upper(), CURRENCIES_DATA_FILE)
-            crypto_id, target_symbol = _get_crypto_symbol_and_id(
-                crypto_name=target_currency, file_path=CRYPTOCURRENCIES_DATA_FILE
-            )
-            conversion_rate = _get_rate_crypto(crypto_id, input_currency, CRYPTO_BASE_URL)
+def _get_conversion_rate(input_currency: str, target_currency: str, conversion_type: str) -> Any:
+    """
+    Requests the latest conversion rate from the online rate services. Raises a
+    RatesNotAvailableError if the rate cannot be obtained, e.g. without internet access.
 
-        elif conversion_type == "crypto_to_fiat":
-            target_symbol, _ = _get_data(target_currency.upper(), CURRENCIES_DATA_FILE)
-            crypto_id, input_symbol = _get_crypto_symbol_and_id(
-                crypto_name=input_currency, file_path=CRYPTOCURRENCIES_DATA_FILE
-            )
-            conversion_rate = _get_rate_crypto(crypto_id, target_currency, CRYPTO_BASE_URL)
-        else:
-            # TODO - Find out whether crypto to crypto conversion in supported??
-            crypto_id, target_symbol = _get_crypto_symbol_and_id(
-                crypto_name=target_currency, file_path=CRYPTOCURRENCIES_DATA_FILE
-            )
-            conversion_rate = _get_rate_crypto(crypto_id, input_currency, CRYPTO_BASE_URL)
-
-        return input_symbol, target_symbol, conversion_rate
-
-    if input_currency in cryptocurrency_data:
-        _, input_symbol = _get_crypto_symbol_and_id(input_currency, CRYPTOCURRENCIES_DATA_FILE)
-    else:
-        input_currency = input_currency.upper()
-
-        input_symbol, _ = _get_data(input_currency, CURRENCIES_DATA_FILE)
-
-    return input_symbol
+        - fiat to fiat: the price of 1 unit of the input currency in the target currency
+        - fiat to crypto: the price of 1 coin of the target currency in the input currency
+        - crypto to fiat: the price of 1 coin of the input currency in the target currency
+    """
+    if conversion_type == "fiat_to_fiat":
+        return _get_rate(input_currency.upper(), target_currency.upper(), FIAT_BASE_URL)
+    crypto = _crypto_data()
+    if conversion_type == "fiat_to_crypto":
+        return _get_rate_crypto(crypto[target_currency][0], input_currency, CRYPTO_BASE_URL)
+    return _get_rate_crypto(crypto[input_currency][0], target_currency, CRYPTO_BASE_URL)

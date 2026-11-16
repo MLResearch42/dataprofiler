@@ -2,12 +2,12 @@
 
 import os
 from os.path import dirname
-from typing import List
+from typing import TYPE_CHECKING, List
 
 import pandas as pd
-import dask.dataframe as dd
-from sqlalchemy.engine.base import Engine
-from sqlalchemy import create_engine
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 def get_dataset_names() -> List[str]:
@@ -28,26 +28,6 @@ def get_dataset_names() -> List[str]:
     datasets = list(map(lambda f: os.path.splitext(f)[0], csv_files))
 
     return datasets
-
-
-def get_db_names() -> List[str]:
-    """
-    Get all available database names. It is all csv file names in 'database' folder.
-
-    Returns
-    -------
-    datasets: list
-        A list of all available dataset names.
-
-    """
-    module_path = dirname(__file__)
-    files = os.listdir(f"{module_path}/database")
-    db_files = list(filter(lambda x: x.endswith(".db"), files))
-
-    # remove suffix csv and get dataset names
-    db_names = list(map(lambda f: os.path.splitext(f)[0], db_files))
-
-    return db_names
 
 
 def _get_dataset_path(name: str) -> str:
@@ -100,35 +80,12 @@ def load_dataset(name: str) -> pd.DataFrame:
     return df
 
 
-def load_db(name: str) -> Engine:
+def _load_dataset_as_dask(name: str) -> "dd.DataFrame":
     """
-    Load a database file
-
-    Parameters
-    ----------
-    name: str
-        Name of the database file
-
-    Returns
-    -------
-    db_url : str
-        SQLite url
+    Return a dask dataframe from dd.read_csv. Used for testing; needs Dask.
     """
-    file_name = name.lower()
-    if not file_name.endswith(".db"):
-        file_name += ".db"
+    import dask.dataframe as dd  # pylint: disable=import-outside-toplevel
 
-    db_file_path = str(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "database", file_name)
-    )
-    db_engine = create_engine(f"sqlite:///{db_file_path}")
-    return db_engine
-
-
-def _load_dataset_as_dask(name: str) -> dd.DataFrame:
-    """
-    Return a dask dataframe from dd.read_csv. Used for testing.
-    """
     path = _get_dataset_path(name)
     ddf = dd.read_csv(path)
     return ddf

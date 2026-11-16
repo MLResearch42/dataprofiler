@@ -1,119 +1,171 @@
-[tool.poetry]
-authors = ["SFU Database System Lab <dsl.cs.sfu@gmail.com>"]
-description = "Dataprep: Data Preparation in Python"
-maintainers = [
-  "Weiyuan Wu <youngw@sfu.com>",
-  "Jinglin Peng <jinglin_peng@sfu.ca>",
-  "Pei Wang <peiw@sfu.ca>",
-  "Brandon Lockhart <brandon_lockhart@sfu.ca>",
-  "Song Bian <biansonghz@gmail.com>",
-  "Danrui Qi <qidanrui@gmail.com>",
-  "Wenbin Li <freyalisfu@gmail.com>",
-  "Alvin Lam <hfl6@sfu.ca>"
-]
-name = "dataprep"
-version = "0.4.6"
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
 
+[project]
+name = "dataprep-next"
+dynamic = ["version"]
+description = "DataPrep, maintained: fast exploratory data analysis and data cleaning for pandas, built for notebooks."
+readme = "README.md"
 license = "MIT"
-
-readme = "README.md" # Markdown files are supported
-
-homepage = "https://github.com/sfu-db/dataprep"
-repository = "https://github.com/sfu-db/dataprep"
-
-keywords = ["dataprep", "eda", "connector", "data science", "exploratory data analysis", "data exploration"]
-
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "SFU Database System Lab", email = "dsl.cs.sfu@gmail.com" }]
+keywords = [
+  "dataprep",
+  "eda",
+  "exploratory data analysis",
+  "data profiling",
+  "data cleaning",
+  "data science",
+  "pandas",
+  "notebook",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
-  "Topic :: Software Development :: Build Tools",
-  "Environment :: Console",
-  "Operating System :: OS Independent",
-  "Intended Audience :: Science/Research",
+  "Framework :: IPython",
+  "Framework :: Jupyter",
   "Intended Audience :: Developers",
   "Intended Audience :: Financial and Insurance Industry",
   "Intended Audience :: Healthcare Industry",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Scientific/Engineering",
-  "Framework :: IPython",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Scientific/Engineering :: Visualization",
 ]
 
-[tool.poetry.build]
-generate-setup-file = false
-
-[tool.poetry.dependencies]
-python = ">=3.8,<3.13"
-
-# Dependencies for EDA
-bokeh = "^2"
-dask = {version = ">=2022.3.0", extras = ["array", "dataframe", "delayed"]}
-nltk = "^3.6.7"
-numpy = [
-  {version = "^1.24", python = "<3.9"},
-  {version = "^1.26", python = ">=3.9"}
+# Lower bounds are the oldest versions the test suite is run against.
+dependencies = [
+  # shared
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "tqdm>=4.66",
+  # eda
+  "bokeh>=3.4",
+  "jinja2>=3.1",
+  "pydantic>=2.5",
+  "scipy>=1.11",
+  "wordcloud>=1.9.3",
+  # clean
+  "python-crfsuite>=0.9.10",
+  "python-stdnum>=2.2",
+  "rapidfuzz>=3.6",
+  "regex>=2023.12.25",
+  "varname>=0.13",
 ]
-pandas = "^1.1"
-pydot = "^1.4.2"
-scipy = [
-  {version = "^1.8", python = "<3.12"},
-  {version = ">1.8", python = ">=3.12"}
+
+[project.optional-dependencies]
+# accept Dask DataFrames as input (pandas DataFrames need nothing extra)
+dask = ["dask[dataframe]>=2024.12"]
+# clean_df_gui(): a point-and-click cleaning app served by Flask
+gui = ["flask>=3.0", "flask-cors>=4.0"]
+# stemming / lemmatizing in word clouds and clean_text
+nlp = ["nltk>=3.8.1"]
+# the interactive clean_duplication() tool (metaphone only ships as source code)
+duplication = ["ipywidgets>=8.1", "metaphone>=0.6"]
+# widget progress bars in notebooks (plain text progress bars are used without it)
+notebook = ["ipykernel>=6", "ipywidgets>=8.1"]
+all = ["dataprep-next[dask,duplication,gui,nlp,notebook]"]
+dev = [
+  "dataprep-next[all]",
+  "build>=1.2",
+  "nbclient>=0.10",
+  "nbformat>=5.10",
+  "pytest>=8",
+  "pytest-cov>=5",
+  "pytest-xdist>=3.5",
+  "ruff>=0.6",
+  "twine>=5",
 ]
-wordcloud = "^1.8"
-sqlalchemy = "2.0.25"
+docs = [
+  "nbsphinx>=0.9",
+  "sphinx>=7",
+  "sphinx-autodoc-typehints>=2",
+  "sphinx-rtd-theme>=2",
+]
 
-# Dependencies for Connector
-aiohttp = "^3.6"
-ipywidgets = "^7.5"
-jinja2 = ">=3.0,<3.1"
-jsonpath-ng = "^1.5"
-pydantic = "^1.6"
-tqdm = "^4.48"
+[project.urls]
+Homepage = "https://github.com/MLResearch42/dataprofiler"
+Repository = "https://github.com/MLResearch42/dataprofiler"
+Issues = "https://github.com/MLResearch42/dataprofiler/issues"
+Changelog = "https://github.com/MLResearch42/dataprofiler/blob/develop/CHANGELOG.md"
+"Original project" = "https://github.com/sfu-db/dataprep"
 
-# Dependencies for Clean
-flask = "^2"
-flask_cors = "^3.0.10"
-metaphone = "^0.6"
-python-stdnum = "^1.16"
-regex = "^2021.8.3"
-varname = "^0.8.1"
-python-crfsuite = "0.9.10"
-rapidfuzz = "^2.1.2"
+[tool.hatch.version]
+path = "dataprep/__init__.py"
 
-[tool.poetry.dev-dependencies]
-black = "^24.2.0"
-codecov = "^2"
-docopt = "^0.6"
-gitpython = "^3"
-ipykernel = "^6"
-ipython = "^7"
-nbsphinx = "^0.8"
-pylint = "^2"
-pyright = "^0.0.13"
-pytest = "^6"
-pytest-cov = "^3"
-rope = "^0.16"
-rstcheck = "^3"
-seaborn = "^0.11"
-sphinx = "^4"
-sphinx-autobuild = "^2021"
-sphinx-autodoc-typehints = "^1"
-toml = "^0.10"
+[tool.hatch.build.targets.wheel]
+packages = ["dataprep"]
+exclude = [
+  "dataprep/tests",
+  # source of the cleaning GUI; only the built frontend_dist is needed at runtime
+  "dataprep/clean/gui/clean_frontend",
+  "**/.DS_Store",
+]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "/dataprep",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+exclude = [
+  "dataprep/clean/gui/clean_frontend/node_modules",
+  "**/.DS_Store",
+]
 
-[tool.black]
-exclude = '''
-(
-    /(
-        \.eggs
-    | \.git
-    | \.pytype
-    | \.pytest_cache
-    | build
-    | dist
-    )/
-)
-'''
+[tool.pytest.ini_options]
+testpaths = ["dataprep/tests"]
+python_files = ["test*.py"]
+addopts = "-ra --strict-markers -p no:cacheprovider"
+markers = [
+  "slow: tests that take more than a few seconds",
+  "browser: tests that open a web browser (set DATAPREP_BROWSER_TESTS=1)",
+]
+filterwarnings = [
+  "error::DeprecationWarning:dataprep.*",
+  "error::FutureWarning:dataprep.*",
+]
+
+[tool.ruff]
 line-length = 100
-target-version = ['py38','py39','py310','py311','py312']
+target-version = "py310"
+extend-exclude = ["dataprep/clean/gui/clean_frontend", "docs", "examples"]
 
-[build-system]
-build-backend = "poetry.masonry.api"
-requires = ["poetry>=1"]
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # import sorting
+  "B",   # likely bugs
+  "UP",  # outdated syntax
+  "NPY", # numpy deprecations
+  "PD002", # pandas inplace
+]
+ignore = [
+  "E501",   # line length is handled by the formatter
+  "B008",   # function calls in argument defaults (used by the config models)
+  "B905",   # zip() without strict=: lengths are equal by construction throughout
+  "UP031",  # %-formatting inside JavaScript code templates is intentional
+  "UP006", "UP007", "UP035", "UP045",  # keep typing.List / Optional spellings for now
+]
+
+[tool.ruff.lint.per-file-ignores]
+# `series == True` is element-wise pandas comparison, not a style slip;
+# tests use np.random with fixed seeds on purpose.
+"dataprep/tests/**" = ["B", "E712", "E741", "NPY002"]
+"dataprep/**/__init__.py" = ["F401"]
+
+[tool.coverage.run]
+source = ["dataprep"]
+omit = ["dataprep/tests/*"]

@@ -1,221 +1,64 @@
 """
-Flask backend of Dataprep.Clean GUI.
+Flask backend of the Dataprep.Clean GUI.
+
+The backend serves the pre-built frontend in ``frontend_dist`` and a small JSON
+API that applies the clean functions to the DataFrame being cleaned. It is
+started by :func:`dataprep.clean.clean_df_gui`; flask is only imported when
+this module is imported.
 """
 
-# pylint: disable=R0912, R0915
-from typing import Any
+# pylint: disable=R0912, R0915, invalid-name, too-many-lines
+from __future__ import annotations
 
-import threading
-import io
-import copy
-import time
+import importlib
 import inspect
 import logging
-
-from base64 import b64encode
-from os import path
-from tempfile import mkdtemp
+import socket
+import threading
 from ast import literal_eval
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from IPython.display import Javascript, display
+try:
+    from flask import Flask, Response, render_template, request
+    from flask_cors import CORS
+    from werkzeug.serving import BaseWSGIServer, make_server
+except ImportError as err:  # pragma: no cover
+    raise ImportError(
+        "clean_df_gui requires the flask and flask-cors packages. "
+        "Install them with: pip install flask flask-cors"
+    ) from err
 
-from flask import Flask, render_template, request
-from flask_cors import CORS
+from ..utils import apply_partitions
 
-from dataprep.clean import (
-    clean_email,
-    clean_headers,
-    clean_country,
-    clean_date,
-    clean_lat_long,
-    clean_ip,
-    clean_phone,
-    clean_json,
-    clean_url,
-    clean_address,
-    clean_df,
-    clean_currency,
-)
-from dataprep.clean.clean_au_abn import clean_au_abn
-from dataprep.clean.clean_au_acn import clean_au_acn
-from dataprep.clean.clean_au_tfn import clean_au_tfn
-from dataprep.clean.clean_be_iban import clean_be_iban
-from dataprep.clean.clean_be_vat import clean_be_vat
-from dataprep.clean.clean_bg_egn import clean_bg_egn
-from dataprep.clean.clean_bg_pnf import clean_bg_pnf
-from dataprep.clean.clean_bg_vat import clean_bg_vat
-from dataprep.clean.clean_br_cnpj import clean_br_cnpj
-from dataprep.clean.clean_br_cpf import clean_br_cpf
-from dataprep.clean.clean_by_unp import clean_by_unp
-from dataprep.clean.clean_ca_bn import clean_ca_bn
-from dataprep.clean.clean_ca_sin import clean_ca_sin
-from dataprep.clean.clean_ch_esr import clean_ch_esr
-from dataprep.clean.clean_ch_ssn import clean_ch_ssn
-from dataprep.clean.clean_ch_uid import clean_ch_uid
-from dataprep.clean.clean_ch_vat import clean_ch_vat
-from dataprep.clean.clean_cl_rut import clean_cl_rut
-from dataprep.clean.clean_cn_ric import clean_cn_ric
-from dataprep.clean.clean_cn_uscc import clean_cn_uscc
-from dataprep.clean.clean_co_nit import clean_co_nit
-from dataprep.clean.clean_cr_cpf import clean_cr_cpf
-from dataprep.clean.clean_cr_cpj import clean_cr_cpj
-from dataprep.clean.clean_cr_cr import clean_cr_cr
-from dataprep.clean.clean_cu_ni import clean_cu_ni
-from dataprep.clean.clean_cy_vat import clean_cy_vat
-from dataprep.clean.clean_cz_dic import clean_cz_dic
-from dataprep.clean.clean_cz_rc import clean_cz_rc
-from dataprep.clean.clean_de_handelsregisternummer import clean_de_handelsregisternummer
-from dataprep.clean.clean_de_idnr import clean_de_idnr
-from dataprep.clean.clean_de_stnr import clean_de_stnr
-from dataprep.clean.clean_de_vat import clean_de_vat
-from dataprep.clean.clean_de_wkn import clean_de_wkn
-from dataprep.clean.clean_dk_cpr import clean_dk_cpr
-from dataprep.clean.clean_dk_cvr import clean_dk_cvr
-from dataprep.clean.clean_do_cedula import clean_do_cedula
-from dataprep.clean.clean_do_ncf import clean_do_ncf
-from dataprep.clean.clean_do_rnc import clean_do_rnc
-from dataprep.clean.clean_ec_ci import clean_ec_ci
-from dataprep.clean.clean_ec_ruc import clean_ec_ruc
-from dataprep.clean.clean_ee_ik import clean_ee_ik
-from dataprep.clean.clean_ee_kmkr import clean_ee_kmkr
-from dataprep.clean.clean_ee_registrikood import clean_ee_registrikood
-from dataprep.clean.clean_es_ccc import clean_es_ccc
-from dataprep.clean.clean_es_cif import clean_es_cif
-from dataprep.clean.clean_es_cups import clean_es_cups
-from dataprep.clean.clean_es_dni import clean_es_dni
-from dataprep.clean.clean_es_iban import clean_es_iban
-from dataprep.clean.clean_es_nie import clean_es_nie
-from dataprep.clean.clean_es_nif import clean_es_nif
-from dataprep.clean.clean_es_referenciacatastral import clean_es_referenciacatastral
-from dataprep.clean.clean_eu_at_02 import clean_eu_at_02
-from dataprep.clean.clean_eu_banknote import clean_eu_banknote
-from dataprep.clean.clean_eu_eic import clean_eu_eic
-from dataprep.clean.clean_eu_nace import clean_eu_nace
-from dataprep.clean.clean_eu_vat import clean_eu_vat
-from dataprep.clean.clean_fi_alv import clean_fi_alv
-from dataprep.clean.clean_fi_associationid import clean_fi_associationid
-from dataprep.clean.clean_fi_hetu import clean_fi_hetu
-from dataprep.clean.clean_fi_veronumero import clean_fi_veronumero
-from dataprep.clean.clean_fi_ytunnus import clean_fi_ytunnus
-from dataprep.clean.clean_fr_nif import clean_fr_nif
-from dataprep.clean.clean_fr_nir import clean_fr_nir
-from dataprep.clean.clean_fr_siren import clean_fr_siren
-from dataprep.clean.clean_fr_siret import clean_fr_siret
-from dataprep.clean.clean_fr_tva import clean_fr_tva
-from dataprep.clean.clean_gb_nhs import clean_gb_nhs
-from dataprep.clean.clean_gb_sedol import clean_gb_sedol
-from dataprep.clean.clean_gb_upn import clean_gb_upn
-from dataprep.clean.clean_gb_utr import clean_gb_utr
-from dataprep.clean.clean_gb_vat import clean_gb_vat
-from dataprep.clean.clean_gr_amka import clean_gr_amka
-from dataprep.clean.clean_gr_vat import clean_gr_vat
-from dataprep.clean.clean_gt_nit import clean_gt_nit
-from dataprep.clean.clean_hr_oib import clean_hr_oib
-from dataprep.clean.clean_hu_anum import clean_hu_anum
-from dataprep.clean.clean_id_npwp import clean_id_npwp
-from dataprep.clean.clean_ie_pps import clean_ie_pps
-from dataprep.clean.clean_ie_vat import clean_ie_vat
-from dataprep.clean.clean_il_hp import clean_il_hp
-from dataprep.clean.clean_il_idnr import clean_il_idnr
-from dataprep.clean.clean_in_aadhaar import clean_in_aadhaar
-from dataprep.clean.clean_in_pan import clean_in_pan
-from dataprep.clean.clean_is_kennitala import clean_is_kennitala
-from dataprep.clean.clean_is_vsk import clean_is_vsk
-from dataprep.clean.clean_it_aic import clean_it_aic
-from dataprep.clean.clean_it_codicefiscale import clean_it_codicefiscale
-from dataprep.clean.clean_it_iva import clean_it_iva
-from dataprep.clean.clean_jp_cn import clean_jp_cn
-from dataprep.clean.clean_kr_brn import clean_kr_brn
-from dataprep.clean.clean_kr_rrn import clean_kr_rrn
-from dataprep.clean.clean_li_peid import clean_li_peid
-from dataprep.clean.clean_lt_pvm import clean_lt_pvm
-from dataprep.clean.clean_lt_asmens import clean_lt_asmens
-from dataprep.clean.clean_lu_tva import clean_lu_tva
-from dataprep.clean.clean_lv_pvn import clean_lv_pvn
-from dataprep.clean.clean_mc_tva import clean_mc_tva
-from dataprep.clean.clean_md_idno import clean_md_idno
-from dataprep.clean.clean_me_iban import clean_me_iban
-from dataprep.clean.clean_mt_vat import clean_mt_vat
-from dataprep.clean.clean_mu_nid import clean_mu_nid
-from dataprep.clean.clean_mx_curp import clean_mx_curp
-from dataprep.clean.clean_mx_rfc import clean_mx_rfc
-from dataprep.clean.clean_my_nric import clean_my_nric
-from dataprep.clean.clean_nl_brin import clean_nl_brin
-from dataprep.clean.clean_nl_btw import clean_nl_btw
-from dataprep.clean.clean_nl_bsn import clean_nl_bsn
-from dataprep.clean.clean_nl_onderwijsnummer import clean_nl_onderwijsnummer
-from dataprep.clean.clean_nl_postcode import clean_nl_postcode
-from dataprep.clean.clean_no_fodselsnummer import clean_no_fodselsnummer
-from dataprep.clean.clean_no_iban import clean_no_iban
-from dataprep.clean.clean_no_kontonr import clean_no_kontonr
-from dataprep.clean.clean_no_mva import clean_no_mva
-from dataprep.clean.clean_no_orgnr import clean_no_orgnr
-from dataprep.clean.clean_nz_bankaccount import clean_nz_bankaccount
-from dataprep.clean.clean_nz_ird import clean_nz_ird
-from dataprep.clean.clean_pe_cui import clean_pe_cui
-from dataprep.clean.clean_pe_ruc import clean_pe_ruc
-from dataprep.clean.clean_pl_nip import clean_pl_nip
-from dataprep.clean.clean_pl_pesel import clean_pl_pesel
-from dataprep.clean.clean_pl_regon import clean_pl_regon
-from dataprep.clean.clean_pt_nif import clean_pt_nif
-from dataprep.clean.clean_py_ruc import clean_py_ruc
-from dataprep.clean.clean_ro_cf import clean_ro_cf
-from dataprep.clean.clean_ro_cnp import clean_ro_cnp
-from dataprep.clean.clean_ro_cui import clean_ro_cui
-from dataprep.clean.clean_ro_onrc import clean_ro_onrc
-from dataprep.clean.clean_isbn import clean_isbn
-
-# with split
-from dataprep.clean.clean_bic import clean_bic
-from dataprep.clean.clean_bitcoin import clean_bitcoin
-from dataprep.clean.clean_casrn import clean_casrn
-from dataprep.clean.clean_cusip import clean_cusip
-from dataprep.clean.clean_ean import clean_ean
-from dataprep.clean.clean_figi import clean_figi
-from dataprep.clean.clean_grid import clean_grid
-from dataprep.clean.clean_iban import clean_iban
-from dataprep.clean.clean_imei import clean_imei
-from dataprep.clean.clean_imo import clean_imo
-from dataprep.clean.clean_imsi import clean_imsi
-from dataprep.clean.clean_isan import clean_isan
-from dataprep.clean.clean_isil import clean_isil
-from dataprep.clean.clean_isin import clean_isin
-from dataprep.clean.clean_ismn import clean_ismn
-from dataprep.clean.clean_issn import clean_issn
-from dataprep.clean.clean_ad_nrt import clean_ad_nrt
-from dataprep.clean.clean_al_nipt import clean_al_nipt
-from dataprep.clean.clean_ar_cbu import clean_ar_cbu
-from dataprep.clean.clean_ar_cuit import clean_ar_cuit
-from dataprep.clean.clean_ar_dni import clean_ar_dni
-from dataprep.clean.clean_at_uid import clean_at_uid
-from dataprep.clean.clean_at_vnr import clean_at_vnr
-from dataprep.clean.clean_lei import clean_lei
-from dataprep.clean.clean_meid import clean_meid
-from dataprep.clean.clean_vatin import clean_vatin
-
-# configuration
-DEBUG = True
+DEFAULT_PORT = 7680
 
 # instantiate the app
 app = Flask(__name__, static_folder="frontend_dist/static", template_folder="frontend_dist")
-app.config.from_object(__name__)
 
 # enable CORS
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # disable useless log
-log = logging.getLogger("werkzeug")
-log.setLevel(logging.ERROR)
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-# pylint: disable=C0103, W0603, too-many-locals
-origin_df = pd.DataFrame({})
-index_df = pd.DataFrame({})
 
-# List of operation log
-all_logs = []
-operation_log = []
+class _CleanFunctions:
+    """
+    Dictionary-like access to the clean functions by name. The functions are
+    looked up in dataprep.clean on demand, so that only the functions that are
+    actually used in the GUI are imported.
+    """
+
+    def __getitem__(self, name: str) -> Callable[..., Any]:
+        if name not in clean_list:
+            raise KeyError(name)
+        func: Callable[..., Any] = getattr(importlib.import_module("dataprep.clean"), name)
+        return func
+
+    def __contains__(self, name: object) -> bool:
+        return name in clean_list
 
 
 clean_list = [
@@ -388,175 +231,7 @@ clean_list = [
     "clean_vatin",
 ]
 # Dictionary of functions
-clean_function_dic = {
-    "clean_email": clean_email,
-    "clean_headers": clean_headers,
-    "clean_country": clean_country,
-    "clean_date": clean_date,
-    "clean_lat_long": clean_lat_long,
-    "clean_ip": clean_ip,
-    "clean_phone": clean_phone,
-    "clean_url": clean_url,
-    "clean_json": clean_json,
-    "clean_address": clean_address,
-    "clean_df": clean_df,
-    # "clean_duplication": clean_duplication,
-    "clean_currency": clean_currency,
-    "clean_au_abn": clean_au_abn,
-    "clean_au_acn": clean_au_acn,
-    "clean_au_tfn": clean_au_tfn,
-    "clean_be_iban": clean_be_iban,
-    "clean_be_vat": clean_be_vat,
-    "clean_bg_egn": clean_bg_egn,
-    "clean_bg_pnf": clean_bg_pnf,
-    "clean_bg_vat": clean_bg_vat,
-    "clean_br_cnpj": clean_br_cnpj,
-    "clean_br_cpf": clean_br_cpf,
-    "clean_by_unp": clean_by_unp,
-    "clean_ca_bn": clean_ca_bn,
-    "clean_ca_sin": clean_ca_sin,
-    "clean_ch_esr": clean_ch_esr,
-    "clean_ch_ssn": clean_ch_ssn,
-    "clean_ch_uid": clean_ch_uid,
-    "clean_ch_vat": clean_ch_vat,
-    "clean_cl_rut": clean_cl_rut,
-    "clean_cn_ric": clean_cn_ric,
-    "clean_cn_uscc": clean_cn_uscc,
-    "clean_co_nit": clean_co_nit,
-    "clean_cr_cpf": clean_cr_cpf,
-    "clean_cr_cpj": clean_cr_cpj,
-    "clean_cr_cr": clean_cr_cr,
-    "clean_cu_ni": clean_cu_ni,
-    "clean_cy_vat": clean_cy_vat,
-    "clean_cz_dic": clean_cz_dic,
-    "clean_cz_rc": clean_cz_rc,
-    "clean_de_handelsregisternummer": clean_de_handelsregisternummer,
-    "clean_de_idnr": clean_de_idnr,
-    "clean_de_stnr": clean_de_stnr,
-    "clean_de_vat": clean_de_vat,
-    "clean_de_wkn": clean_de_wkn,
-    "clean_dk_cpr": clean_dk_cpr,
-    "clean_dk_cvr": clean_dk_cvr,
-    "clean_do_cedula": clean_do_cedula,
-    "clean_do_ncf": clean_do_ncf,
-    "clean_do_rnc": clean_do_rnc,
-    "clean_ec_ci": clean_ec_ci,
-    "clean_ec_ruc": clean_ec_ruc,
-    "clean_ee_ik": clean_ee_ik,
-    "clean_ee_kmkr": clean_ee_kmkr,
-    "clean_ee_registrikood": clean_ee_registrikood,
-    "clean_es_ccc": clean_es_ccc,
-    "clean_es_cif": clean_es_cif,
-    "clean_es_cups": clean_es_cups,
-    "clean_es_dni": clean_es_dni,
-    "clean_es_iban": clean_es_iban,
-    "clean_es_nie": clean_es_nie,
-    "clean_es_nif": clean_es_nif,
-    "clean_es_referenciacatastral": clean_es_referenciacatastral,
-    "clean_eu_at_02": clean_eu_at_02,
-    "clean_eu_banknote": clean_eu_banknote,
-    "clean_eu_eic": clean_eu_eic,
-    "clean_eu_nace": clean_eu_nace,
-    "clean_eu_vat": clean_eu_vat,
-    "clean_fi_alv": clean_fi_alv,
-    "clean_fi_associationid": clean_fi_associationid,
-    "clean_fi_hetu": clean_fi_hetu,
-    "clean_fi_veronumero": clean_fi_veronumero,
-    "clean_fi_ytunnus": clean_fi_ytunnus,
-    "clean_fr_nif": clean_fr_nif,
-    "clean_fr_nir": clean_fr_nir,
-    "clean_fr_siren": clean_fr_siren,
-    "clean_fr_siret": clean_fr_siret,
-    "clean_fr_tva": clean_fr_tva,
-    "clean_gb_nhs": clean_gb_nhs,
-    "clean_gb_sedol": clean_gb_sedol,
-    "clean_gb_upn": clean_gb_upn,
-    "clean_gb_utr": clean_gb_utr,
-    "clean_gb_vat": clean_gb_vat,
-    "clean_gr_amka": clean_gr_amka,
-    "clean_gr_vat": clean_gr_vat,
-    "clean_gt_nit": clean_gt_nit,
-    "clean_hr_oib": clean_hr_oib,
-    "clean_hu_anum": clean_hu_anum,
-    "clean_id_npwp": clean_id_npwp,
-    "clean_ie_pps": clean_ie_pps,
-    "clean_ie_vat": clean_ie_vat,
-    "clean_il_hp": clean_il_hp,
-    "clean_il_idnr": clean_il_idnr,
-    "clean_in_aadhaar": clean_in_aadhaar,
-    "clean_in_pan": clean_in_pan,
-    "clean_is_kennitala": clean_is_kennitala,
-    "clean_is_vsk": clean_is_vsk,
-    "clean_it_aic": clean_it_aic,
-    "clean_it_codicefiscale": clean_it_codicefiscale,
-    "clean_it_iva": clean_it_iva,
-    "clean_jp_cn": clean_jp_cn,
-    "clean_kr_brn": clean_kr_brn,
-    "clean_kr_rrn": clean_kr_rrn,
-    "clean_li_peid": clean_li_peid,
-    "clean_lt_pvm": clean_lt_pvm,
-    "clean_lt_asmens": clean_lt_asmens,
-    "clean_lu_tva": clean_lu_tva,
-    "clean_lv_pvn": clean_lv_pvn,
-    "clean_mc_tva": clean_mc_tva,
-    "clean_md_idno": clean_md_idno,
-    "clean_me_iban": clean_me_iban,
-    "clean_mt_vat": clean_mt_vat,
-    "clean_mu_nid": clean_mu_nid,
-    "clean_mx_curp": clean_mx_curp,
-    "clean_mx_rfc": clean_mx_rfc,
-    "clean_my_nric": clean_my_nric,
-    "clean_nl_brin": clean_nl_brin,
-    "clean_nl_btw": clean_nl_btw,
-    "clean_nl_bsn": clean_nl_bsn,
-    "clean_nl_onderwijsnummer": clean_nl_onderwijsnummer,
-    "clean_nl_postcode": clean_nl_postcode,
-    "clean_no_fodselsnummer": clean_no_fodselsnummer,
-    "clean_no_iban": clean_no_iban,
-    "clean_no_kontonr": clean_no_kontonr,
-    "clean_no_mva": clean_no_mva,
-    "clean_no_orgnr": clean_no_orgnr,
-    "clean_nz_bankaccount": clean_nz_bankaccount,
-    "clean_nz_ird": clean_nz_ird,
-    "clean_pe_cui": clean_pe_cui,
-    "clean_pe_ruc": clean_pe_ruc,
-    "clean_pl_nip": clean_pl_nip,
-    "clean_pl_pesel": clean_pl_pesel,
-    "clean_pl_regon": clean_pl_regon,
-    "clean_pt_nif": clean_pt_nif,
-    "clean_py_ruc": clean_py_ruc,
-    "clean_ro_cf": clean_ro_cf,
-    "clean_ro_cnp": clean_ro_cnp,
-    "clean_ro_cui": clean_ro_cui,
-    "clean_ro_onrc": clean_ro_onrc,
-    "clean_isbn": clean_isbn,
-    "clean_bic": clean_bic,
-    "clean_bitcoin": clean_bitcoin,
-    "clean_casrn": clean_casrn,
-    "clean_cusip": clean_cusip,
-    "clean_ean": clean_ean,
-    "clean_figi": clean_figi,
-    "clean_grid": clean_grid,
-    "clean_iban": clean_iban,
-    "clean_imei": clean_imei,
-    "clean_imo": clean_imo,
-    "clean_imsi": clean_imsi,
-    "clean_isan": clean_isan,
-    "clean_isil": clean_isil,
-    "clean_isin": clean_isin,
-    "clean_ismn": clean_ismn,
-    "clean_issn": clean_issn,
-    "clean_ad_nrt": clean_ad_nrt,
-    "clean_al_nipt": clean_al_nipt,
-    "clean_ar_cbu": clean_ar_cbu,
-    "clean_ar_cuit": clean_ar_cuit,
-    "clean_ar_dni": clean_ar_dni,
-    "clean_at_uid": clean_at_uid,
-    "clean_at_vnr": clean_at_vnr,
-    "clean_lei": clean_lei,
-    "clean_meid": clean_meid,
-    "clean_vatin": clean_vatin,
-}
+clean_function_dic = _CleanFunctions()
 
 contain_birthday_place = ["clean_cn_ric", "clean_my_nric"]
 contain_isin = ["clean_de_wkn", "clean_gb_sedol", "clean_cusip"]
@@ -608,18 +283,84 @@ contain_split = [
     "clean_meid",
     "clean_vatin",
 ]
-DECODE_FUNC = """
-    function b64DecodeUnicode(str) {
-        // Going backwards: from bytestream, to percent-encoding, to original string.
-        return decodeURIComponent(atob(str).split('').map(function(c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
-    }
-"""
 
-ts_list = []
-ts_point = -1
-tmp_dir = mkdtemp().replace("\\", "/")
+
+class GuiState:
+    """
+    The state of the GUI: the DataFrame being cleaned, the history of the
+    cleaning steps (for undo and redo) and the log of the applied operations.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.origin_df = pd.DataFrame({})
+        self.history: List[pd.DataFrame] = [self.origin_df]
+        self.logs: List[str] = []
+        self.pointer = 0
+        self.exported_df: Optional[pd.DataFrame] = None
+        self.exported_log: str = ""
+
+    def reset(self, df: pd.DataFrame) -> None:
+        """Start cleaning a new DataFrame, forgetting all previous steps."""
+        with self.lock:
+            self.origin_df = df
+            self.history = [df]
+            self.logs = []
+            self.pointer = 0
+
+    @property
+    def df(self) -> pd.DataFrame:
+        """The current version of the DataFrame."""
+        return self.history[self.pointer]
+
+    @property
+    def operation_log(self) -> List[str]:
+        """The operations that lead from the original to the current DataFrame."""
+        return self.logs[: self.pointer]
+
+    def push(self, df: pd.DataFrame, log: str) -> None:
+        """Record a new cleaning step. Steps that were undone are discarded."""
+        with self.lock:
+            self.history = self.history[: self.pointer + 1] + [df]
+            self.logs = self.logs[: self.pointer] + [log]
+            self.pointer += 1
+
+    def undo(self) -> None:
+        """Go back one step."""
+        with self.lock:
+            self.pointer = max(self.pointer - 1, 0)
+
+    def redo(self) -> None:
+        """Redo the step that was undone last."""
+        with self.lock:
+            self.pointer = min(self.pointer + 1, len(self.history) - 1)
+
+    def code(self) -> str:
+        """Python code that reproduces the current DataFrame from the original one."""
+        return "".join(f"df = {log}\n" for log in self.operation_log)
+
+
+STATE = GuiState()
+
+
+def _to_bool(value: Any) -> bool:
+    """Convert a form value such as "True", "true" or "1" to a boolean."""
+    return str(value).strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _table_payload(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    The JSON description of a DataFrame expected by the frontend. Every value is
+    sent as a string, so that the response is valid JSON whatever the data types
+    and missing values of the DataFrame are.
+    """
+    col_names = [str(col) for col in df.columns]
+    table_columns = [
+        {"colName": col_name, "colLabel": col_name, "colWidth": 180} for col_name in col_names
+    ]
+    columns = [[str(val) for val in df.iloc[:, pos].tolist()] for pos in range(df.shape[1])]
+    table_data = [dict(zip(col_names, row)) for row in zip(*columns)]
+    return {"tableData": table_data, "tableColumns": table_columns}
 
 
 # sanity check route
@@ -636,35 +377,7 @@ def getInitSheet() -> Any:
     """
     This function shows the input table in GUI.
     """
-    global index_df
-    global origin_df
-
-    if origin_df.empty:
-        origin_df = index_df.copy(deep=True)
-        global tmp_dir
-        ts = time.time()
-        df_file = path.join(tmp_dir, f"df_{str(int(ts))}.pkl").replace("\\", "/")
-        origin_df.to_pickle(df_file)
-        global ts_list
-        global ts_point
-        ts_list.append(ts)
-        ts_point += 1
-
-    index_df = index_df.astype(str)
-    col_names = index_df.columns.values.tolist()
-    table_columns = []
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = index_df.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-
-    return {"tableData": table_data, "tableColumns": table_columns}
+    return _table_payload(STATE.df)
 
 
 @app.route("/fileUpload", methods=["POST"])
@@ -672,30 +385,11 @@ def getUploadedFile() -> Any:
     """
     This function shows the uploaded table file in GUI.
     """
-    file = request.files["file"]
+    file = request.files.get("file")
     if not file:
         return "No File"
-    stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
-    # csv_input = csv.reader(stream)
-    # print(csv_input)
-    # for row in csv_input:
-    #    print(row)
-
-    global index_df
-    index_df = pd.read_csv(stream)
-    col_names = index_df.columns.values.tolist()
-    table_columns = []
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = index_df.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-    return {"tableData": table_data, "tableColumns": table_columns}
+    STATE.reset(pd.read_csv(file.stream))
+    return _table_payload(STATE.df)
 
 
 @app.route("/cleanWholeDF", methods=["POST"])
@@ -704,58 +398,37 @@ def cleanWholeDF() -> Any:
     This function receive the request of clean whole dataframe.
     """
     params = request.form
-    clean_headers = params["clean_headers"]
-    data_type_detection = params["data_type_detection"]
-    standardize_missing = params["standardize_missing_values"]
-    downcast_memory = params["downcast_memory"]
+    clean_headers = _to_bool(params.get("clean_headers", True))
+    data_type_detection = params.get("data_type_detection", "semantic")
+    standardize_missing = params.get("standardize_missing_values", "fill")
+    downcast_memory = _to_bool(params.get("downcast_memory", True))
 
-    global index_df
-    df_cleaned = clean_df(
-        index_df,
-        clean_header=clean_headers,
-        data_type_detection=data_type_detection,
-        standardize_missing_values=standardize_missing,
-        downcast_memory=downcast_memory,
-        report=False,
-    )
-    df_cleaned = df_cleaned[1].astype(str)
-    col_names = df_cleaned.columns.values.tolist()
-    table_columns = []
-
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = df_cleaned.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-    index_df = df_cleaned
-
-    global tmp_dir
-    ts = time.time()
-    df_file = path.join(tmp_dir, f"df_{str(int(ts))}.pkl").replace("\\", "/")
-    index_df.to_pickle(df_file)
-    global ts_list
-    global ts_point
-    ts_list.append(ts)
-    ts_point += 1
+    try:
+        result = clean_function_dic["clean_df"](
+            STATE.df,
+            clean_header=clean_headers,
+            data_type_detection=data_type_detection,
+            standardize_missing_values=standardize_missing,
+            downcast_memory=downcast_memory,
+            report=False,
+        )
+    except (TypeError, KeyError, ValueError) as error:
+        return {"error": f"clean_df failed: {error}"}, 400
+    # clean_df returns (data types, DataFrame) unless data_type_detection is "none"
+    df_cleaned = result[1] if isinstance(result, tuple) else result
 
     # Update log with clean_df function
     log = (
-        f"clean_df(df, clean_header={clean_headers},"
-        f"data_type_detection='{data_type_detection}',"
-        f"standardize_missing_values='{standardize_missing}',"
-        f"downcast_memory={downcast_memory})"
+        f"clean_df(df, clean_header={clean_headers}, "
+        f"data_type_detection='{data_type_detection}', "
+        f"standardize_missing_values='{standardize_missing}', "
+        f"downcast_memory={downcast_memory}, report=False)"
     )
-    global all_logs
-    all_logs.append(log)
-    global operation_log
-    operation_log = all_logs[:ts_point]
+    if data_type_detection != "none":
+        log += "[1]"
+    STATE.push(df_cleaned, log)
 
-    return {"tableData": table_data, "tableColumns": table_columns}
+    return _table_payload(df_cleaned)
 
 
 @app.route("/getOperationLog", methods=["GET"])
@@ -763,8 +436,7 @@ def getOperationLog() -> Any:
     """
     This function receive the request of get log of operations.
     """
-    global operation_log
-    return {"operationLog": operation_log}
+    return {"operationLog": STATE.operation_log}
 
 
 @app.route("/getFunctionParams", methods=["GET", "POST"])
@@ -772,10 +444,7 @@ def getFunctionParams() -> Any:
     """
     This function receive the request of get parameter of clean functions.
     """
-    global index_df
-
-    index_df = index_df.astype(str)
-    col_names = index_df.columns.values.tolist()
+    col_names = [str(col) for col in STATE.df.columns]
     table_columns = []
     for col_name in col_names:
         temp_dic = {}
@@ -785,8 +454,10 @@ def getFunctionParams() -> Any:
 
     param_dic = {}
     param_default = {}
-    info = request.get_json()
-    clean_func = info["clean_func"]
+    info = request.get_json(silent=True) or {}
+    clean_func = info.get("clean_func")
+    if clean_func not in clean_list:
+        return {"error": f"unknown clean function {clean_func}"}, 400
 
     args = inspect.signature(clean_function_dic[clean_func]).parameters
     args_list = list(args.keys())
@@ -963,9 +634,9 @@ def getFunctionParams() -> Any:
                 temp_option_list.append(
                     {
                         "value": "(building) house_number street_prefix_abbr street_name "
-                        "street_suffix_abbr,apartment, city, state_abbr zipcode",
+                        "street_suffix_abbr, apartment, city, state_abbr zipcode",
                         "label": "(building) house_number street_prefix_abbr street_name "
-                        "street_suffix_abbr,apartment, city, state_abbr zipcode",
+                        "street_suffix_abbr, apartment, city, state_abbr zipcode",
                     }
                 )
                 temp_option_list.append(
@@ -1016,7 +687,7 @@ def getFunctionParams() -> Any:
                 )
                 temp_option_list.append(
                     {
-                        "value": "abbreviation",
+                        "value": "abbr",
                         "label": "Abbreviation((string with comma seprated values)",
                     }
                 )
@@ -1168,8 +839,8 @@ def getFunctionParams() -> Any:
             if arg == "output_format":
                 temp_option_list.append({"value": "standard", "label": "Standard"})
                 temp_option_list.append({"value": "compact", "label": "Compact"})
-                temp_option_list.append({"value": "base10", "label": "BASE10"})
-                temp_option_list.append({"value": "base13", "label": "BASE13"})
+                temp_option_list.append({"value": "isbn10", "label": "ISBN-10"})
+                temp_option_list.append({"value": "isbn13", "label": "ISBN-13"})
 
                 param_dic[arg] = temp_option_list
                 param_default[arg] = str(args[arg].default)
@@ -1215,100 +886,48 @@ def cleanSingleCol() -> Any:
     This function receive the request of clean one single column.
     """
     params = request.form
-    clean_func = params["clean_func"]
-    selected_col = params["selected_col"]
-    selected_params = literal_eval(params["selected_params"])
-    param_str = ""
-    df_cleaned = ""
-    global index_df
+    clean_func = params.get("clean_func", "")
+    selected_col = params.get("selected_col", "")
 
     try:
-        for param_name in selected_params:
-            if clean_func in clean_list:
-                if selected_params[param_name] == "True":
-                    param_str += f"{param_name}={selected_params[param_name]}, "
-                    selected_params[param_name] = True
-                elif selected_params[param_name] == "False":
-                    param_str += f"{param_name}={selected_params[param_name]}, "
-                    selected_params[param_name] = False
-                elif selected_params[param_name].isnumeric():
-                    param_str += f"{param_name}={selected_params[param_name]}, "
-                    selected_params[param_name] = int(selected_params[param_name])
-                else:
-                    param_str += f"{param_name}='{selected_params[param_name]}', "
-            else:
-                param_str += f"{param_name}={selected_params[param_name]}, "
-                selected_params[param_name] = selected_params[param_name]
+        if clean_func not in clean_list:
+            raise KeyError(f"unknown clean function {clean_func}")
+        selected_params = literal_eval(params.get("selected_params", "{}"))
+        param_strs = []
+        for param_name, value in selected_params.items():
+            if value == "True":
+                selected_params[param_name] = True
+            elif value == "False":
+                selected_params[param_name] = False
+            elif isinstance(value, str) and value.isnumeric():
+                selected_params[param_name] = int(value)
+            param_strs.append(f"{param_name}={selected_params[param_name]!r}")
 
-        param_str = param_str[: (len(param_str) - 2)]
-
-        if clean_func in [
-            "clean_email",
-            "clean_country",
-            "clean_ip",
-            "clean_phone",
-            "clean_url",
-            "clean_date",
-            "clean_address",
-            "clean_json",
-        ]:
-            df_cleaned = clean_function_dic[clean_func](
-                index_df, column=selected_col, report=False, **selected_params
-            )
+        func = clean_function_dic[clean_func]
+        accepted = inspect.signature(func).parameters
+        if clean_func == "clean_headers":
+            kwargs: Dict[str, Any] = {}
+            call = "clean_headers(df"
         elif clean_func == "clean_lat_long":
-            df_cleaned = clean_function_dic[clean_func](
-                index_df, lat_long=selected_col, report=False, **selected_params
-            )
-            # elif clean_func == "clean_text":
-            #    df_cleaned = clean_function_dic[clean_func](
-            #        index_df, column=selected_col
-            #    )
-        elif clean_func == "clean_headers":
-            df_cleaned = clean_function_dic[clean_func](index_df, **selected_params)
+            kwargs = {"lat_long": selected_col}
+            call = f"clean_lat_long(df, lat_long={selected_col!r}"
         else:
-            df_cleaned = clean_function_dic[clean_func](
-                index_df, column=selected_col, **selected_params
-            )
-        print(df_cleaned)
-        df_cleaned = df_cleaned.astype(str)
-        col_names = df_cleaned.columns.values.tolist()
-        table_columns = []
-        for col_name in col_names:
-            temp_dic = {}
-            temp_dic["colName"] = col_name
-            temp_dic["colLabel"] = col_name
-            temp_dic["colWidth"] = 180
-            table_columns.append(temp_dic)
-        transposed_json = df_cleaned.T.to_dict()
-        table_data = []
-        for key in transposed_json:
-            table_data.append(transposed_json[key])
-        index_df = df_cleaned
+            kwargs = {"column": selected_col}
+            call = f"{clean_func}(df, column={selected_col!r}"
+        # do not print the cleaning report and the progress bar in the notebook
+        quiet = {name: False for name in ("report", "progress") if name in accepted}
+        df_cleaned = func(STATE.df, **kwargs, **quiet, **selected_params)
+    except (TypeError, KeyError, ValueError, SyntaxError) as error:
+        return {"error": f"The {selected_col} column can not be cleaned: {error}"}, 400
 
-        global tmp_dir
-        ts = time.time()
-        df_file = path.join(tmp_dir, f"df_{str(int(ts))}.pkl").replace("\\", "/")
-        index_df.to_pickle(df_file)
-        global ts_list
-        global ts_point
-        ts_list.append(ts)
-        ts_point += 1
+    if not isinstance(df_cleaned, pd.DataFrame):
+        return {"error": f"{clean_func} did not return a DataFrame"}, 400
 
-        # Update log with clean_df function
-        log = f"{clean_func}(df, column='{selected_col}', {param_str})"
-        global all_logs
-        all_logs.append(log)
-        global operation_log
-        operation_log = all_logs[:ts_point]
+    # Update log with the clean function
+    log = ", ".join([call] + param_strs + [f"{name}=False" for name in quiet]) + ")"
+    STATE.push(df_cleaned, log)
 
-        return {"tableData": table_data, "tableColumns": table_columns}
-
-    except TypeError:
-        print(f'{"There is a type error."}')
-    except KeyError:
-        print(f"The {selected_col} column can not clean, please try it again.")
-    except ValueError:
-        print(f'{"Some field value is not valid"}')
+    return _table_payload(df_cleaned)
 
 
 @app.route("/getOriginData", methods=["GET"])
@@ -1316,40 +935,8 @@ def getOriginData() -> Any:
     """
     This function gets the origin data.
     """
-    global index_df
-    global origin_df
-    # print(origin_df)
-    index_df = copy.deepcopy(origin_df)
-
-    index_df = index_df.astype(str)
-    col_names = index_df.columns.values.tolist()
-    table_columns = []
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = index_df.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-
-    global tmp_dir
-    ts = time.time()
-    df_file = path.join(tmp_dir, f"df_{str(int(ts))}.pkl").replace("\\", "/")
-    index_df.to_pickle(df_file)
-    global ts_list
-    global ts_point
-    ts_list = [ts]
-    ts_point = 0
-
-    global all_logs
-    all_logs = []
-    global operation_log
-    operation_log = []
-
-    return {"tableData": table_data, "tableColumns": table_columns}
+    STATE.reset(STATE.origin_df)
+    return _table_payload(STATE.df)
 
 
 @app.route("/undo", methods=["GET"])
@@ -1357,34 +944,8 @@ def getUndoData() -> Any:
     """
     This function undo one step operation.
     """
-    global ts_point
-    global ts_list
-    if ts_point > 0:
-        ts_point -= 1
-    global tmp_dir
-    df_file = path.join(tmp_dir, f"df_{str(int(ts_list[ts_point]))}.pkl").replace("\\", "/")
-
-    global index_df
-    index_df = pd.read_pickle(df_file)
-
-    index_df = index_df.astype(str)
-    col_names = index_df.columns.values.tolist()
-    table_columns = []
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = index_df.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-
-    global operation_log
-    operation_log = all_logs[:ts_point]
-
-    return {"tableData": table_data, "tableColumns": table_columns}
+    STATE.undo()
+    return _table_payload(STATE.df)
 
 
 @app.route("/redo", methods=["GET"])
@@ -1392,35 +953,8 @@ def getRedoData() -> Any:
     """
     This function redo the undoed operation.
     """
-
-    global ts_point
-    global ts_list
-    if ts_point < len(ts_list) - 1:
-        ts_point += 1
-    global tmp_dir
-    df_file = path.join(tmp_dir, f"df_{str(int(ts_list[ts_point]))}.pkl").replace("\\", "/")
-
-    global index_df
-    index_df = pd.read_pickle(df_file)
-
-    index_df = index_df.astype(str)
-    col_names = index_df.columns.values.tolist()
-    table_columns = []
-    for col_name in col_names:
-        temp_dic = {}
-        temp_dic["colName"] = col_name
-        temp_dic["colLabel"] = col_name
-        temp_dic["colWidth"] = 180
-        table_columns.append(temp_dic)
-    transposed_json = index_df.T.to_dict()
-    table_data = []
-    for key in transposed_json:
-        table_data.append(transposed_json[key])
-
-    global operation_log
-    operation_log = all_logs[:ts_point]
-
-    return {"tableData": table_data, "tableColumns": table_columns}
+    STATE.redo()
+    return _table_payload(STATE.df)
 
 
 @app.route("/exportCSV", methods=["POST"])
@@ -1428,94 +962,148 @@ def exportCSV() -> Any:
     """
     This function exports CSV.
     """
-    global index_df
-    index_df.to_csv("index_df.csv", index=False)
+    return Response(STATE.df.to_csv(index=False), mimetype="text/csv")
 
-    f = open("index_df.csv", "rb")
-    return f.read()
+
+def _user_namespace() -> Optional[Dict[str, Any]]:
+    """
+    The namespace of the running IPython kernel or shell (Jupyter, JupyterLab,
+    VS Code), or None if not running inside IPython.
+    """
+    try:
+        from IPython import get_ipython  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return None
+    shell = get_ipython()
+    return None if shell is None else shell.user_ns
 
 
 @app.route("/exportDF", methods=["GET"])
 def exportDF() -> Any:
     """
-    This function exports dataframe.
+    This function exports dataframe: the current DataFrame is kept for
+    ``CleanGui.df`` and, when running in a notebook kernel, assigned to the
+    variable ``cleaned_df`` of the notebook.
     """
-
-    # def add_cell(text,  type='code', direct='above'):
-    #    text = text.replace('\n','\\n').replace("\"", "\\\"").replace("'", "\\'")
-
-    #    display(Javascript('''
-    #    var cell = IPython.notebook.insert_cell_{}("{}")
-    #    cell.set_text("{}")
-    #    '''.format(direct, type, text)));
-
-    # for i in range(3):
-    #    add_cell(f'# heading{i}', 'markdown')
-    #    add_cell(f'code {i}')
-
-    global index_df
-
-    code = "# dataframe with cleaned string values\ncleaned_df"
-    encoded_code = (b64encode(str.encode(code))).decode()
-    final_df = index_df.copy(deep=True)
-    # create a temporary directory for the dataframe file
-    tmp_dir = mkdtemp().replace("\\", "/")
-    df_file = path.join(tmp_dir, "clean_gui_output.pkl").replace("\\", "/")
-    final_df.to_pickle(df_file)
-    # code to read the file and delete the temporary directory afterwards
-    execute_code = (
-        "import pandas as pd\n"
-        "import shutil\n"
-        f"cleaned_df = pd.read_pickle('{df_file}')\n"
-        f"shutil.rmtree('{tmp_dir}')"
-    )
-    encoded_execute = (b64encode(str.encode(execute_code))).decode()
-    code = f"""
-             {DECODE_FUNC}
-             IPython.notebook.kernel.execute(b64DecodeUnicode("{encoded_execute}"));
-             var code = IPython.notebook.insert_cell_below('code');
-             code.set_text(b64DecodeUnicode("{encoded_code}"));
-             code.execute();
-             """
-    display(Javascript(code))
-    return "success"
+    STATE.exported_df = STATE.df.copy()
+    namespace = _user_namespace()
+    if namespace is not None:
+        namespace["cleaned_df"] = STATE.exported_df
+    return {"status": "success", "variable": "cleaned_df", "inNotebook": namespace is not None}
 
 
 @app.route("/exportExecutionLog", methods=["GET"])
 def exportExecutionLog() -> Any:
     """
-    This function exports the log of execution.
+    This function exports the log of execution: the Python code that reproduces
+    the cleaning steps is kept for ``CleanGui.code`` and, when running in a
+    notebook kernel, assigned to the variable ``cleaning_code`` of the notebook.
     """
-    notebook_type = "code"
-    direct = "below"
-    text = ""
-
-    global operation_log
-    for log in operation_log:
-        text = text + "df = " + log + "\n"
-    # print(text)
-    text = text.replace("\n", "\\n").replace('"', '\\"').replace("'", "\\'")
-
-    display(
-        Javascript(
-            """
-        var cell = IPython.notebook.insert_cell_{}("{}")
-        cell.set_text("{}")
-        """.format(
-                direct, notebook_type, text
-            )
-        )
-    )
-
-    return "success"
+    STATE.exported_log = STATE.code()
+    namespace = _user_namespace()
+    if namespace is not None:
+        namespace["cleaning_code"] = STATE.exported_log
+    return {"status": "success", "variable": "cleaning_code", "code": STATE.exported_log}
 
 
-def launch(df) -> None:
+class CleanGui:
     """
-    This function incorporate the GUI of clean module into Jupyter Notebook.
+    Handle of a running clean GUI.
+
+    Attributes
+    ----------
+    url
+        The address of the GUI. Open it in a web browser.
     """
-    global index_df
-    index_df = df
-    app_kwargs = {"port": 7680, "host": "localhost", "debug": False}
-    thread = threading.Thread(target=app.run, kwargs=app_kwargs, daemon=True)
+
+    def __init__(self, server: BaseWSGIServer, thread: threading.Thread, url: str) -> None:
+        self._server: Optional[BaseWSGIServer] = server
+        self._thread = thread
+        self.url = url
+
+    @property
+    def df(self) -> pd.DataFrame:
+        """The DataFrame as currently shown in the GUI."""
+        return STATE.df
+
+    @property
+    def code(self) -> str:
+        """Python code that reproduces the cleaning steps done in the GUI."""
+        return STATE.code()
+
+    @property
+    def running(self) -> bool:
+        """True while the server of the GUI is running."""
+        return self._server is not None
+
+    def stop(self) -> None:
+        """Stop the server of the GUI and free its port."""
+        global _CURRENT  # pylint: disable=global-statement
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+            self._thread.join(timeout=5)
+            self._server = None
+        if _CURRENT is self:
+            _CURRENT = None
+
+    def wait(self) -> None:
+        """Block until interrupted (Ctrl+C). Use it when running from a script."""
+        try:
+            while self._thread.is_alive():
+                self._thread.join(timeout=0.5)
+        except KeyboardInterrupt:
+            self.stop()
+
+    def __repr__(self) -> str:
+        status = "running" if self.running else "stopped"
+        return f"<CleanGui {status} at {self.url}>"
+
+
+_CURRENT: Optional[CleanGui] = None
+
+
+def _port_is_free(host: str, port: int) -> bool:
+    """Return True if a server can listen on the port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def launch(df: Any, host: str = "localhost", port: Optional[int] = None) -> CleanGui:
+    """
+    Start the server of the clean GUI for a DataFrame, in a background thread.
+
+    Parameters
+    ----------
+    df
+        The pandas (or Dask) DataFrame to clean.
+    host
+        The network interface to listen on. The default only accepts connections
+        from this computer.
+    port
+        The port to listen on. By default port 7680 is used, or a free port chosen
+        by the operating system if 7680 is taken.
+
+    Returns
+    -------
+    The handle of the running GUI. A GUI that is already running is stopped first.
+    """
+    global _CURRENT  # pylint: disable=global-statement
+    if _CURRENT is not None:
+        _CURRENT.stop()
+
+    parts = apply_partitions(df, lambda pdf: pdf)
+    STATE.reset(parts[0] if len(parts) == 1 else pd.concat(parts))
+
+    if port is None:
+        port = DEFAULT_PORT if _port_is_free(host, DEFAULT_PORT) else 0
+    server = make_server(host, port, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, name="dataprep-clean-gui", daemon=True)
     thread.start()
+
+    _CURRENT = CleanGui(server, thread, f"http://{host}:{server.server_port}/")
+    return _CURRENT

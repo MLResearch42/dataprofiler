@@ -2,18 +2,29 @@
 Clean and validate a DataFrame column containing URLs.
 """
 
+from __future__ import annotations
+
 import re
-from operator import itemgetter
-from typing import Any, List, Union
+from collections import Counter
+from functools import partial
+from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import unquote, urlparse
 
-import dask
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
-from .utils import NULL_VALUES, to_dask
+from .utils import (
+    _percent,
+    add_columns,
+    check_errors,
+    is_null,
+    map_column,
+    unzip,
+    validate_values,
+)
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 # to extract queries
 QUERY_REGEX = re.compile(r"(\?|\&)([^=]+)\=([^&]+)")
@@ -39,20 +50,17 @@ AUTH_VALUES = {
     "authentication-key",
 }
 
-# unified_list
-UNIFIED_AUTH_LIST = set()
-
 
 def clean_url(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
-    remove_auth: Union[bool, List[str]] = False,
+    remove_auth: bool | list[str] = False,
     split: bool = False,
     inplace: bool = False,
     errors: str = "coerce",
     report: bool = True,
     progress: bool = True,
-) -> Union[pd.DataFrame, dd.DataFrame]:
+) -> pd.DataFrame:
     """
     Clean and standardize URLs.
 
@@ -110,63 +118,43 @@ def clean_url(
     0  https://github.com/sfu-db/dataprep  {'scheme': 'https', 'host': 'github.com', 'url...
     1             https://www.google.com/  {'scheme': 'https', 'host': 'www.google.com', ...
     """
-    # pylint: disable=too-many-arguments, global-statement
+    # pylint: disable=too-many-arguments
+    check_errors(errors)
 
-    # convert to dask
-    df = to_dask(df)
+    # the query names to remove: the default authentication parameters, plus the
+    # ones supplied by the user if remove_auth is a list
+    auth_values: frozenset[str] | None = None
+    if remove_auth:
+        extra = () if isinstance(remove_auth, bool) else remove_auth
+        auth_values = frozenset({*AUTH_VALUES, *extra})
 
-    # unified list of auth removal params
-    if not isinstance(remove_auth, bool):
-        global UNIFIED_AUTH_LIST
-        UNIFIED_AUTH_LIST = {*AUTH_VALUES, *set(remove_auth)}
-
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format_url(x, column, remove_auth, split, errors) for x in srs],
-        meta=object,
+    df, rows = map_column(
+        df,
+        column,
+        partial(_format_url, col=column, auth_values=auth_values, split=split, errors=errors),
+        progress,
     )
     if split:
-        df = df.assign(
-            scheme=df["clean_code_tup"].map(itemgetter(0)),
-            host=df["clean_code_tup"].map(itemgetter(1)),
-            _temp_=df["clean_code_tup"].map(itemgetter(2)),
-            queries=df["clean_code_tup"].map(itemgetter(3), meta=("queries", object)),
-            _code_=df["clean_code_tup"].map(itemgetter(4), meta=("_code_", object)),
-            _nrem_=df["clean_code_tup"].map(itemgetter(5), meta=("_nrem_", object)),
-        )
-        df = df.rename(columns={"_temp_": f"{column}_clean"})
-
+        schemes, hosts, cleaned, queries, codes, removed = unzip(rows, 6)
+        new_columns = {
+            "scheme": schemes,
+            "host": hosts,
+            f"{column}_clean": cleaned,
+            "queries": queries,
+        }
     else:
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-            _nrem_=df["clean_code_tup"].map(itemgetter(2)),
-        )
-        df = df.rename(columns={"_temp_": f"{column}_details"})
+        details, codes, removed = unzip(rows, 3)
+        new_columns = {f"{column}_details": details}
+    df = add_columns(df, new_columns, drop=column if inplace else None)
 
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    # sum of auth tokens that were removed
-    removed_auth_cnt = df["_nrem_"].sum()
-    df = df.drop(columns=["clean_code_tup", "_code_", "_nrem_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats, removed_auth_cnt = dask.compute(df, stats, removed_auth_cnt)
-
-    # output a report describing the result of clean_url
+    # output the report describing the changes to the column
     if report:
-        _report_url(stats, removed_auth_cnt, errors)
+        _report_url(Counter(codes), sum(removed), errors)
 
     return df
 
 
-def validate_url(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
+def validate_url(x: str | pd.Series) -> bool | pd.Series:
     """
     Validate URLs.
 
@@ -189,13 +177,11 @@ def validate_url(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
     Name: url, dtype: bool
     """
 
-    if isinstance(x, pd.Series):
-        return x.apply(_check_url, args=(False,))
-    return _check_url(x, False)
+    return validate_values(x, partial(_check_url, clean=False))
 
 
 def _format_url(
-    url: Any, col: str, remove_auth: Union[bool, List[str]], split: bool, errors: str
+    url: Any, col: str, auth_values: frozenset[str] | None, split: bool, errors: str
 ) -> Any:
     """
     This function formats the input value "url"
@@ -224,15 +210,16 @@ def _format_url(
         return (result, np.nan, np.nan, np.nan, 1, 0) if split else (result, 1, 0)
 
     # regex for finding the query / params and values
+    url = str(url)
     re_queries = re.findall(QUERY_REGEX, url)
     all_queries = dict((y, z) for _, y, z in re_queries)
 
     # initialize the removed authentication code and count for the stats
     rem_auth_code, rem_auth_cnt = 2, 0
     # removing auth queries
-    if remove_auth:
-        to_remove = AUTH_VALUES if isinstance(remove_auth, bool) else UNIFIED_AUTH_LIST
-        filtered_queries = {k: v for k, v in all_queries.items() if k not in to_remove}
+    filtered_queries = all_queries
+    if auth_values is not None:
+        filtered_queries = {k: v for k, v in all_queries.items() if k not in auth_values}
 
         # count of removed auth queries
         rem_auth_cnt = len(all_queries) - len(filtered_queries)
@@ -247,7 +234,7 @@ def _format_url(
     host = parsed.hostname if parsed.hostname else ""
     path = parsed.path if parsed.path else ""
     cleaned_url = unquote(f"{scheme}://{host}{path}").replace(" ", "")
-    queries = filtered_queries if remove_auth else all_queries
+    queries = filtered_queries
 
     # returning the type based upon the split parameter.
     if split:
@@ -264,21 +251,17 @@ def _check_url(url: Any, clean: bool) -> Any:
     Function to check whether a value is a valid url
     """
     # check if the url is parsable
-    try:
-        if url in NULL_VALUES:
-            return "null" if clean else False
+    if is_null(url):
+        return "null" if clean else False
 
-        url = unquote(str(url)).replace(" ", "")
+    url = unquote(str(url)).replace(" ", "")
 
-        if re.match(VALID_URL_REGEX, url):
-            return "success" if clean else True
-        return "unknown" if clean else False
-
-    except TypeError:
-        return "unknown" if clean else False
+    if VALID_URL_REGEX.match(url):
+        return "success" if clean else True
+    return "unknown" if clean else False
 
 
-def _report_url(stats: pd.Series, removed_auth_cnt: int, errors: str) -> None:
+def _report_url(stats: Mapping[int, int], removed_auth_cnt: int, errors: str) -> None:
     """
     This function displays the stats report
 
@@ -289,31 +272,28 @@ def _report_url(stats: pd.Series, removed_auth_cnt: int, errors: str) -> None:
         3 := values that are parsed and DID have authentication querires removed
     """
     print("URL Cleaning Report:")
-    nrows = stats.sum()
+    counts = Counter(stats)
+    nrows = sum(counts.values())
 
-    # count all values that were parsed (2 and 3 in stats)
-    nclnd = (stats.loc[2] if 2 in stats.index else 0) + (stats.loc[3] if 3 in stats.index else 0)
-    pclnd = round(nclnd / nrows * 100, 2)
+    nclnd = counts[2] + counts[3]
+    pclnd = _percent(nclnd, nrows)
     if nclnd > 0:
         print(f"\t{nclnd} values parsed ({pclnd}%)")
 
-    # count all values that could not be parsed
-    nunknown = stats.loc[1] if 1 in stats.index else 0
+    nunknown = counts[1]
     if nunknown > 0:
-        punknown = round(nunknown / nrows * 100, 2)
         expl = "set to NaN" if errors == "coerce" else "left unchanged"
-        print(f"\t{nunknown} values unable to be parsed ({punknown}%), {expl}")
+        print(
+            f"\t{nunknown} values unable to be parsed ({_percent(nunknown, nrows)}%), {expl}"
+        )
 
-    # if auth queries were removed
     if removed_auth_cnt > 0:
-        print(f"Removed {removed_auth_cnt} auth queries from {stats.loc[3]} rows")
+        print(f"Removed {removed_auth_cnt} auth queries from {counts[3]} rows")
 
-    # count all null values
-    nnull = stats.loc[0] if 0 in stats.index else 0
+    nnull = counts[0]
     if errors == "coerce":  # add unknown values that were set to NaN
-        nnull += stats.loc[1] if 1 in stats.index else 0
-    pnull = round(nnull / nrows * 100, 2)
+        nnull += nunknown
     print(
         f"Result contains {nclnd} ({pclnd}%) parsed key-value pairs "
-        f"and {nnull} null values ({pnull}%)"
+        f"and {nnull} null values ({_percent(nnull, nrows)}%)"
     )

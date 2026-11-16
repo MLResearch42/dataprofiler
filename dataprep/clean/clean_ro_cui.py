@@ -2,21 +2,27 @@
 Clean and validate a DataFrame column containing Romanian company identifiers (CUIs).
 """
 
-# pylint: disable=too-many-lines, too-many-arguments, too-many-branches
-from typing import Any, Union
-from operator import itemgetter
+from __future__ import annotations
 
-import dask.dataframe as dd
-import numpy as np
+from typing import TYPE_CHECKING
+
 import pandas as pd
-
 from stdnum.ro import cui
-from ..progress_bar import ProgressBar
-from .utils import NULL_VALUES, to_dask
+
+from .stdnum_utils import clean_stdnum, validate_stdnum
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
+
+
+_FORMATTERS = {
+    "compact": cui.compact,
+    "standard": cui.compact,
+}
 
 
 def clean_ro_cui(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     output_format: str = "standard",
     inplace: bool = False,
@@ -28,135 +34,84 @@ def clean_ro_cui(
 
     Parameters
     ----------
-        df
-            A pandas or Dask DataFrame containing the data to be cleaned.
-        col
-            The name of the column containing data of CUI type.
-        output_format
-            The output format of standardized number string.
-            If output_format = 'compact', return string without any separators or whitespace.
-            If output_format = 'standard', return string with proper separators and whitespace.
-            Note: in the case of CUI, the compact format is the same as the standard one.
+    df
+        A pandas or Dask DataFrame containing the data to be cleaned.
+    column
+        The name of the column containing data of CUI type.
+    output_format
+        The output format of standardized number string.
+        If output_format = 'compact', return string without any separators or whitespace.
+        If output_format = 'standard', return string with proper separators and whitespace.
+        Note: in the case of CUI, the compact format is the same as the standard one.
 
-            (default: "standard")
-        inplace
-           If True, delete the column containing the data that was cleaned.
-           Otherwise, keep the original column.
+        (default: "standard")
+    inplace
+        If True, the cleaned column replaces the original column.
+        Otherwise, keep the original column and append the cleaned column.
 
-           (default: False)
-        errors
-            How to handle parsing errors.
-            - ‘coerce’: invalid parsing will be set to NaN.
-            - ‘ignore’: invalid parsing will return the input.
-            - ‘raise’: invalid parsing will raise an exception.
+        (default: False)
+    errors
+        How to handle parsing errors.
+        - 'coerce': invalid parsing will be set to NaN.
+        - 'ignore': invalid parsing will return the input.
+        - 'raise': invalid parsing will raise an exception.
 
-            (default: 'coerce')
-        progress
-            If True, display a progress bar.
+        (default: 'coerce')
+    progress
+        If True, display a progress bar. Only shown for Dask DataFrames.
 
-            (default: True)
+        (default: True)
 
     Examples
     --------
     Clean a column of CUI data.
 
-    >>> df = pd.DataFrame({
-            "cui": [
-            "185 472 90",
-            "185 472 91",]
-            })
-    >>> clean_ro_cui(df, 'cui')
-            cui             cui_clean
-    0       185 472 90      18547290
-    1       185 472 91      NaN
+    >>> df = pd.DataFrame({"cui": ["185 472 90", "185 472 91"]})
+    >>> clean_ro_cui(df, "cui")
+              cui cui_clean
+    0  185 472 90  18547290
+    1  185 472 91       NaN
     """
-
-    if output_format not in {"compact", "standard"}:
-        raise ValueError(
-            f"output_format {output_format} is invalid. " 'It needs to be "compact" or "standard".'
-        )
-
-    # convert to dask
-    df = to_dask(df)
-
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format(x, output_format, errors) for x in srs],
-        meta=object,
+    return clean_stdnum(
+        df,
+        column,
+        cui.is_valid,
+        _FORMATTERS,
+        output_format,
+        inplace,
+        errors,
+        progress,
     )
-
-    df = df.assign(
-        _temp_=df["clean_code_tup"].map(itemgetter(0)),
-    )
-
-    df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    df = df.drop(columns=["clean_code_tup"])
-
-    if inplace:
-        df[column] = df[f"{column}_clean"]
-        df = df.drop(columns=f"{column}_clean")
-        df = df.rename(columns={column: f"{column}_clean"})
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df = df.compute()
-
-    return df
 
 
 def validate_ro_cui(
-    df: Union[str, pd.Series, dd.Series, pd.DataFrame, dd.DataFrame],
+    df: str | pd.Series | dd.Series | pd.DataFrame | dd.DataFrame,
     column: str = "",
-) -> Union[bool, pd.Series, pd.DataFrame]:
+) -> bool | pd.Series | pd.DataFrame:
     """
     Validate if a data cell is CUI in a DataFrame column. For each cell, return True or False.
 
     Parameters
     ----------
     df
-            A pandas or Dask DataFrame containing the data to be validated.
-    col
-            The name of the column to be validated.
+        A string, a pandas or Dask Series, or a pandas or Dask DataFrame
+        containing the data to be validated.
+    column
+        The name of the column to be validated. Only used when df is a
+        DataFrame; if empty, every cell of the DataFrame is validated.
+
+    Examples
+    --------
+    >>> validate_ro_cui("185 472 90")
+    True
+    >>> df = pd.DataFrame({"cui": ["185 472 90", "185 472 91"]})
+    >>> validate_ro_cui(df["cui"])
+    0     True
+    1    False
+    Name: cui, dtype: bool
+    >>> validate_ro_cui(df, "cui")
+    0     True
+    1    False
+    Name: cui, dtype: bool
     """
-    if isinstance(df, (pd.Series, dd.Series)):
-        return df.apply(cui.is_valid)
-    elif isinstance(df, (pd.DataFrame, dd.DataFrame)):
-        if column != "":
-            return df[column].apply(cui.is_valid)
-        else:
-            return df.applymap(cui.is_valid)
-    return cui.is_valid(df)
-
-
-def _format(val: Any, output_format: str = "standard", errors: str = "coarse") -> Any:
-    """
-    Reformat a number string with proper separators and whitespace.
-
-    Parameters
-    ----------
-    val
-           The value of number string.
-    output_format
-           If output_format = 'compact', return string without any separators or whitespace.
-           If output_format = 'standard', return string with proper separators and whitespace.
-           Note: in the case of CUI, the compact format is the same as the standard one.
-    """
-    val = str(val)
-    result: Any = []
-
-    if val in NULL_VALUES:
-        return [np.nan]
-
-    if not validate_ro_cui(val):
-        if errors == "raise":
-            raise ValueError(f"Unable to parse value {val}")
-        error_result = val if errors == "ignore" else np.nan
-        return [error_result]
-
-    if output_format in {"compact", "standard"}:
-        result = [cui.compact(val)] + result
-
-    return result
+    return validate_stdnum(df, column, cui.is_valid)

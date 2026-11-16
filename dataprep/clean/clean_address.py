@@ -2,16 +2,15 @@
 Clean and validate a DataFrame column containing US street addresses.
 """
 
-import re
-from operator import itemgetter
-from typing import Any, Dict, List, Tuple, Union
+from __future__ import annotations
 
-import dask
-import dask.dataframe as dd
+import re
+from functools import partial
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
 from .address_utils import (
     ABBR_STATES,
     FULL_PREFIX,
@@ -20,14 +19,17 @@ from .address_utils import (
     PREFIXES,
     SUFFIXES,
     TAG_MAPPING,
-    tag,
     RepeatedLabelError,
+    tag,
 )
-from .utils import NULL_VALUES, create_report_new, to_dask
+from .utils import check_errors, clean_column, create_report_new, is_null, validate_values
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 def clean_address(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     output_format: str = "(building) house_number street_prefix_abbr "
     "street_name street_suffix_abbr, apartment, city, state_abbr zipcode",
@@ -128,41 +130,25 @@ def clean_address(
     """
     # pylint: disable=too-many-arguments
 
-    df = to_dask(df)
-
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format_address(x, output_format, must_contain, split, errors) for x in srs],
-        meta=object,
-    )
+    check_errors(errors)
 
     headers = _get_column_names(output_format, split)
+    new_columns = [f"{column}_clean"] if len(headers) == 1 else headers
 
-    # if there's only one column in the output, name it f"{column}_clean". Otherwise,
-    # get names from the output_format
-    if len(headers) == 1:
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-        )
-        df = df.rename(columns={"_temp_": f"{column}_clean"})
-    else:
-        assignments = {
-            headers[i]: df["clean_code_tup"].map(itemgetter(i), meta=(headers[i], str))
-            for i in range(len(headers))
-        }
-        assignments["_code_"] = df["clean_code_tup"].map(
-            itemgetter(len(headers)), meta=("_code_", int)
-        )
-        df = df.assign(**assignments)
-
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
+    df, stats = clean_column(
+        df,
+        column,
+        partial(
+            _format_address,
+            output_format=output_format,
+            must_contain=must_contain,
+            split=split,
+            errors=errors,
+        ),
+        new_columns,
+        inplace=inplace,
+        progress=progress,
+    )
 
     if report:
         create_report_new("Address", stats, errors)
@@ -170,8 +156,8 @@ def clean_address(
 
 
 def validate_address(
-    x: Union[str, pd.Series], must_contain: Tuple[str, ...] = ("house_number", "street_name")
-) -> Union[bool, pd.Series]:
+    x: str | pd.Series, must_contain: Tuple[str, ...] = ("house_number", "street_name")
+) -> bool | pd.Series:
     """
     Validate US street addresses.
 
@@ -207,10 +193,7 @@ def validate_address(
     Name: address, dtype: bool
     """
 
-    if isinstance(x, pd.Series):
-        return x.apply(_check_address, args=(must_contain, False))
-
-    return _check_address(x, must_contain, False)
+    return validate_values(x, partial(_check_address, must_contain=must_contain, clean=False))
 
 
 def _format_address(
@@ -261,7 +244,7 @@ def _check_address(address: Any, must_contain: Tuple[str, ...], clean: bool) -> 
         If True, a tuple (index, status) is returned.
         If False, the function returns True/False to be used by the validate address function.
     """
-    if address in NULL_VALUES:
+    if is_null(address):
         return (None, "null") if clean else False
 
     address = re.sub(r"[().]", "", str(address))

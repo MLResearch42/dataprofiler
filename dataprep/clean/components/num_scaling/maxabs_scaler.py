@@ -3,7 +3,8 @@ Implement numerical maxabs scaler.
 """
 
 from typing import Any, Union
-import dask.dataframe as dd
+
+import pandas as pd
 
 
 class MaxAbsScaler:
@@ -23,7 +24,7 @@ class MaxAbsScaler:
         self.name = "maxabsScaler"
         self.maxabs = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Extract max absolute value for MaxAbs Scaler according to the provided column.
 
@@ -33,10 +34,13 @@ class MaxAbsScaler:
             Provided data column.
         """
 
-        self.maxabs = max(abs(col_df.drop_duplicates().values.tolist()))
+        self.maxabs = col_df.abs().max()
+        # a column of zeros stays a column of zeros instead of dividing by zero
+        if not self.maxabs > 0:
+            self.maxabs = 1
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Transform the provided data column with the extracted max absolute value.
 
@@ -49,7 +53,7 @@ class MaxAbsScaler:
         result = col_df.map(self.compute_val)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Extract max absolute value for MaxAbs Scaler according to the provided column.
         Transform the provided data column with the extracted max absolute value.

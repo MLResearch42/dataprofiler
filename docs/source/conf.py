@@ -11,11 +11,11 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
+import re
 import sys
 from pathlib import Path
 from typing import cast
 
-import toml
 
 sys.path.insert(0, os.path.abspath("../../"))
 
@@ -23,16 +23,14 @@ sys.path.insert(0, os.path.abspath("../../"))
 
 project = "DataPrep"
 author = "SFU Database Systems Lab"
-copyright = f"©2020 {author}."
+copyright = f"2020-2026 {author} and dataprep-next contributors"
 
 # The full version, including alpha/beta/rc tags
 def get_version() -> str:
-    """
-    Get the library version from pyproject.toml
-    """
-    path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-    pyproject = toml.loads(open(str(path)).read())
-    return cast(str, pyproject["tool"]["poetry"]["version"])
+    """Read the library version from dataprep/__init__.py."""
+    init = Path(__file__).resolve().parents[2] / "dataprep" / "__init__.py"
+    match = re.search(r'^__version__ = "([^"]+)"', init.read_text(), re.M)
+    return cast(str, match.group(1) if match else "0.0.0")
 
 
 release = get_version()
@@ -99,7 +97,7 @@ master_doc = "index"
 html_context = {
     "AUTHOR": author,
     "DESCRIPTION": "DataPrep, documentation site.",
-    "SITEMAP_BASE_URL": "https://sfu-db.github.io/dataprep/",  # Trailing slash is needed
+    "SITEMAP_BASE_URL": "https://github.com/MLResearch42/dataprofiler/",  # Trailing slash is needed
     "VERSION": release,
 }
 

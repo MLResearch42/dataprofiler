@@ -8,10 +8,11 @@ import numpy as np
 import pandas as pd
 
 from ...configs import Config
+from ...dtypes import Continuous, DateTime, GeoGraphy, GeoPoint, Nominal, SmallCardNum
 from ...eda_frame import EDAFrame
-from ...dtypes_v2 import Continuous, Nominal, GeoGraphy, SmallCardNum, DateTime
 from ...intermediate import ColumnsMetadata, Intermediate
 from ...staged import staged
+from ...utils import finite
 from .common import LABELS, uni_histogram
 
 
@@ -24,35 +25,40 @@ def _compute_missing_univariate(  # pylint: disable=too-many-locals
     the missing values in x is dropped."""
     # pylint: disable = too-many-boolean-expressions
 
-    # dataframe with all rows where column x is null removed
-    ddf = df.frame[~df.frame[x].isna()]
+    if x not in df.columns:
+        raise ValueError(f"Column {x!r} not found. Available columns: {list(df.columns)}")
+
+    # rows where column x is present
+    present = ~df.frame[x].isna().to_numpy()
 
     hists = {}
 
     for col in df.columns:
         col_dtype = df.get_eda_dtype(col)
+        categorical = isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime))
         if (
             col == x
-            or (
-                isinstance(col_dtype, (Nominal, GeoGraphy, SmallCardNum, DateTime))
-                and not cfg.bar.enable
-            )
+            or (categorical and not cfg.bar.enable)
             or (isinstance(col_dtype, Continuous) and not cfg.hist.enable)
         ):
             continue
 
-        if isinstance(col_dtype, (SmallCardNum, DateTime)):
-            srs0 = df.frame[col].dropna().astype(str)  # series from original dataframe
-            srs1 = ddf[col].dropna().astype(str)  # series with null rows from col x removed
-        elif isinstance(col_dtype, (GeoGraphy, Nominal, Continuous)):
-            # Geograph, Nominal should be transformed to str when constructing edaframe.
-            # Here we do not need to transform them again.
-            srs0 = df.frame[col].dropna()
-            srs1 = ddf[col].dropna()
+        if categorical:
+            full = df.get_col_as_str(col)
+        elif isinstance(col_dtype, Continuous):
+            full = df.frame[col]
         else:
             raise ValueError(f"unprocessed type:{col_dtype}")
 
-        hists[col] = [uni_histogram(srs, col_dtype, cfg) for srs in [srs0, srs1]]
+        srs0 = full.dropna()  # series from original dataframe
+        srs1 = full[present].dropna()  # series with null rows from col x removed
+
+        rng = None
+        if isinstance(col_dtype, Continuous):
+            # both histograms share the bins of the original data
+            vals = finite(srs0)
+            rng = (vals.min(), vals.max()) if len(vals) else None
+        hists[col] = [uni_histogram(srs, col_dtype, cfg, rng) for srs in [srs0, srs1]]
 
     ### Lazy Region End
     hists = yield hists
@@ -90,7 +96,7 @@ def _compute_missing_univariate(  # pylint: disable=too-many-locals
         # we show the top `num_bins` values, sorted by their count before drop
         col_dtype = df.get_eda_dtype(col_name)
         if len(counts[0]) > cfg.bar.bars and (
-            isinstance(col_dtype, (Nominal, GeoGraphy, SmallCardNum, DateTime))
+            isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum, DateTime))
         ):
             sortidx = np.argsort(-counts[0])
             selected_xs = xs[0][sortidx[: cfg.bar.bars]]

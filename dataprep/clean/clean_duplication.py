@@ -2,14 +2,57 @@
 Clean a DataFrame column containing duplicate values.
 """
 
-from typing import Tuple, List, Dict, Any, Union
+from __future__ import annotations
 
-from ipywidgets.widgets import Label, Dropdown, Checkbox, Button, HBox, VBox, Box, Layout, Text
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+
 import pandas as pd
-import dask.dataframe as dd
-from varname import argname
 
 from .clean_duplication_utils import Clusterer
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
+    from ipywidgets.widgets import (
+        Box,
+        Button,
+        Checkbox,
+        Dropdown,
+        HBox,
+        Label,
+        Layout,
+        Text,
+        Textarea,
+        VBox,
+    )
+
+
+def _import_widgets() -> None:
+    """
+    Import the widget classes used by the user interface into this module.
+
+    ipywidgets is imported the first time the user interface is created, so that
+    importing dataprep.clean does not require it.
+    """
+    # pylint: disable=global-statement,import-outside-toplevel,invalid-name
+    global Box, Button, Checkbox, Dropdown, HBox, Label, Layout, Text, Textarea, VBox
+    try:
+        from ipywidgets.widgets import (
+            Box,
+            Button,
+            Checkbox,
+            Dropdown,
+            HBox,
+            Label,
+            Layout,
+            Text,
+            Textarea,
+            VBox,
+        )
+    except ImportError as err:
+        raise ImportError(
+            "clean_duplication requires the ipywidgets package. "
+            "Install it with: pip install \"dataprep-next[duplication]\""
+        ) from err
 
 DEFAULT_NGRAM = "2"
 DEFAULT_RADIUS = "2"
@@ -17,7 +60,7 @@ DEFAULT_BLOCK_SIZE = "6"
 
 
 def clean_duplication(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     df_var_name: str = "default",
     page_size: int = 5,
@@ -34,9 +77,9 @@ def clean_duplication(
     column
         The name of the column containing duplicate values.
     df_var_name
-        Optional parameter containing the variable name of the DataFrame being cleaned.
-        This is only needed for legacy compatibility with the original veraion of this
-        function, which needed it to produce correct exported code.
+        The variable name of the DataFrame being cleaned. It is used in the exported
+        code and to name the result (``<df_var_name>_clean``). By default the name
+        is taken from the calling code; if it cannot be determined, "df" is used.
 
         (default: 'default')
     page_size
@@ -47,20 +90,41 @@ def clean_duplication(
     Examples
     --------
 
-    After running clean_duplication(df, 'city') below in a notebook, a GUI will appear.
-    Select the merge checkbox, press merge and re-cluster, then press finish.
+    After running clean_duplication(df, 'city') below in a notebook (Jupyter,
+    JupyterLab or VS Code), a GUI will appear. Select the merge checkbox, press
+    "Merge and Re-Cluster", then press "Finish". The cleaned DataFrame is then
+    available in the notebook as the variable ``df_clean``. If "export code" is
+    selected, the ``replace`` calls that reproduce the merges are shown below the GUI.
 
     >>> df = pd.DataFrame({'city': ['New York', 'new york']})
-    >>> clean_duplication(df, 'city')
+    >>> clean_duplication(df, 'city')  # doctest: +SKIP
 
-          city
-    0    New York
-    1    New York
+    After pressing "Finish":
+
+    >>> df_clean  # doctest: +SKIP
+           city
+    0  New York
+    1  New York
     """
     if df_var_name == "default":
-        df_var_name = argname("df", func=clean_duplication)
+        df_var_name = _infer_df_name()
 
     return UserInterface(df, column, df_var_name, page_size).display()
+
+
+def _infer_df_name() -> str:
+    """
+    Return the name of the variable passed as ``df`` to clean_duplication, or "df"
+    if it cannot be determined (varname not installed, or the argument is not a
+    plain variable).
+    """
+    try:
+        from varname import argname  # pylint: disable=import-outside-toplevel
+
+        name = argname("df", func=clean_duplication, frame=2)
+    except Exception:  # pylint: disable=broad-except
+        return "df"
+    return name if isinstance(name, str) and name.isidentifier() else "df"
 
 
 class UserInterface:
@@ -89,8 +153,14 @@ class UserInterface:
     _box: Box
     _loading_label: Label
     _invalid_param_label: Label
+    _code_area: Textarea
+    _result_label: Label
+    result: Union[pd.DataFrame, None] = None
 
-    def __init__(self, df: pd.DataFrame, col_name: str, df_name: str, page_size: int):
+    def __init__(
+        self, df: pd.DataFrame | dd.DataFrame, col_name: str, df_name: str, page_size: int
+    ):
+        _import_widgets()
         self._clusterer = Clusterer(df, col_name, df_name)
         self._clusterer.cluster("fingerprint")
 
@@ -199,7 +269,23 @@ class UserInterface:
 
         footer = HBox([self._sel_all, merge_and_recluster, finish])
 
-        box_children = [self._dropds, headers, self._cluster_and_next_prev, footer]
+        # shows the code that reproduces the merges, hidden until there is code to show
+        self._code_area = Textarea(
+            value="",
+            description="Code",
+            disabled=True,
+            layout=Layout(width="98%", height="120px", display="none"),
+        )
+        # shows where to find the result after pressing "Finish"
+        self._result_label = Label("", layout=Layout(margin="10px"))
+
+        box_children = [
+            self._dropds,
+            headers,
+            self._cluster_and_next_prev,
+            footer,
+            self._code_area,
+        ]
 
         box_layout = Layout(
             display="flex", flex_flow="column", align_items="stretch", border="solid"
@@ -311,7 +397,9 @@ class UserInterface:
         """
         ngram = self._ngram_text.value if self._ngram_text.value else DEFAULT_NGRAM
         radius = self._radius_text.value if self._radius_text.value else DEFAULT_RADIUS
-        block_size = self._block_chars_text.value if self._block_chars_text else DEFAULT_BLOCK_SIZE
+        block_size = (
+            self._block_chars_text.value if self._block_chars_text.value else DEFAULT_BLOCK_SIZE
+        )
         return int(ngram), int(radius), int(block_size)
 
     def _select_all(self, change: Dict[str, Any]) -> None:
@@ -395,10 +483,15 @@ class UserInterface:
 
     def _close(self, _: Dict[str, Any]) -> None:
         """
-        Close the UI and display the final dataframe in the next jupyter notebook cell.
+        Finish cleaning: assign the final DataFrame to a variable in the notebook
+        and replace the UI by a message telling the user where to find it.
         """
-        self._clusterer.final_df()
-        self._box.close()
+        self.result = self._clusterer.final_df()
+        self._result_label.value = (
+            f"Finished. The cleaned DataFrame is available as the variable "
+            f"`{self._clusterer.final_df_name}`."
+        )
+        self._box.children = [self._result_label, self._code_area]
 
     def _execute_merge(self, _: Dict[str, Any]) -> None:
         """
@@ -413,6 +506,7 @@ class UserInterface:
 
         if self._export_code.value:
             self._clusterer.live_export_code(cluster_page, do_merge, new_values)
+            self._show_exported_code()
 
         cluster_method = self._clustering_method_drop.value
         self._clusterer.execute_merge_code(cluster_page, do_merge, new_values)
@@ -427,6 +521,14 @@ class UserInterface:
         """
         if self._page_pos >= len(self._clusterer.clusters):
             self._page_pos -= self._page_size
+
+    def _show_exported_code(self) -> None:
+        """
+        Show the code that reproduces the merges done so far below the UI.
+        """
+        code = "\n".join(self._clusterer.exported_code)
+        self._code_area.value = code
+        self._code_area.layout.display = "flex" if code else "none"
 
     def display(self) -> Box:
         """Display the UI."""

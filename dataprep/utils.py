@@ -1,9 +1,9 @@
 """Utility functions used by the whole library."""
 
-from typing import Any
 import webbrowser
 from tempfile import NamedTemporaryFile
-from IPython.core.display import display, HTML
+from typing import Any
+
 import pandas as pd
 
 
@@ -17,10 +17,10 @@ def is_notebook() -> Any:
 
         # pytype: enable=import-error
 
+        # ZMQInteractiveShell is the kernel behind Jupyter, JupyterLab and
+        # the VS Code notebook / interactive window.
         shell = get_ipython().__class__.__name__
-        if shell == "ZMQInteractiveShell":
-            return True
-        return False
+        return shell == "ZMQInteractiveShell"
     except (NameError, ImportError):
         return False
 
@@ -28,6 +28,8 @@ def is_notebook() -> Any:
 def display_html(html_content: str) -> None:
     """Writes HTML content to a file and displays in browser."""
     if is_notebook():
+        from IPython.display import HTML, display  # pylint: disable=import-outside-toplevel
+
         display(HTML(html_content))
     else:
         with NamedTemporaryFile(suffix=".html", mode="w", delete=False) as tmpf:
@@ -62,10 +64,10 @@ def get_styled_schema(df: pd.DataFrame) -> Any:
             },
             {
                 "selector": "tr:nth-of-type(even)",
-                "props": [("background", "#white"), ("font-size", "13"), ("text-align", "right")],
+                "props": [("background", "white"), ("font-size", "13"), ("text-align", "right")],
             },
-            {"selector": "tr:hover", "props": [("background-color", "e0f1ff")]},
+            {"selector": "tr:hover", "props": [("background-color", "#e0f1ff")]},
         ]
     )
 
-    return styled_df.render()
+    return styled_df.to_html()

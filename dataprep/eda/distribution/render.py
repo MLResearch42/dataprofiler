@@ -2,11 +2,12 @@
 This module implements the visualization for the plot(df) function.
 """  # pylint: disable=too-many-lines
 
+import json
+import math
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-import json
-import os
-import math
 
 import numpy as np
 import pandas as pd
@@ -16,34 +17,34 @@ from bokeh.models import (
     ColorBar,
     ColumnDataSource,
     CustomJSHover,
+    CustomJSTickFormatter,
     FactorRange,
-    FuncTickFormatter,
-    Range1d,
     HoverTool,
     LayoutDOM,
     Legend,
     LegendItem,
     LinearColorMapper,
-    Panel,
     PrintfTickFormatter,
+    Range1d,
+    TabPanel,
 )
-from bokeh.plotting import Figure, figure
+from bokeh.plotting import figure
 from bokeh.transform import cumsum, linear_cmap, transform
 from bokeh.util.hex import hexbin
 from scipy.stats import norm
 from wordcloud import WordCloud
 
 from ..configs import KDE, Bar, Box, Config, Pie, QQNorm, WordFrequency
-from ..dtypes_v2 import Continuous, DateTime, Nominal, GeoGraphy, SmallCardNum, GeoPoint
+from ..dtypes import Continuous, DateTime, GeoGraphy, GeoPoint, Nominal, SmallCardNum
 from ..intermediate import Intermediate
 from ..palette import CATEGORY20, PASTEL1, RDBU, VIRIDIS, YlGnBu
-from ..utils import tweak_figure, _format_ticks, _format_axis, _format_bin_intervals
+from ..utils import _format_axis, _format_bin_intervals, _format_ticks, tweak_figure
 
 COUNTRY_MAP_FILE = os.path.join(os.path.split(os.path.abspath(__file__))[0], "country.json")
 COUNTRY_NAME_FILE = os.path.join(os.path.split(os.path.abspath(__file__))[0], "name_dict.json")
-with open(COUNTRY_MAP_FILE, "r") as fp:
+with open(COUNTRY_MAP_FILE) as fp:
     MAPS = json.load(fp)
-with open(COUNTRY_NAME_FILE, "r") as fp:
+with open(COUNTRY_NAME_FILE) as fp:
     NAME_DICT = json.load(fp)
 
 __all__ = ["render"]
@@ -73,10 +74,14 @@ def _make_title(grp_cnt_stats: Dict[str, int], x: str, y: str) -> str:
 
 
 def _format_values(key: str, value: Any) -> str:
-
-    if not isinstance(value, (int, float)):
-        # if value is a time
+    """Format a statistic for display in a stats table."""
+    if isinstance(value, np.generic):
+        value = value.item()  # numpy scalar -> python scalar
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # e.g. a timestamp
         return str(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
 
     if "Memory" in key:
         # for memory usage
@@ -109,14 +114,14 @@ def _format_values(key: str, value: Any) -> str:
     return str(value)
 
 
-def _empty_figure(title: str, plot_height: int, plot_width: int) -> Figure:
+def _empty_figure(title: str, plot_height: int, plot_width: int) -> figure:
     # If no data to render in the heatmap, i.e. no missing values
     # we render a blank heatmap
-    fig = Figure(
+    fig = figure(
         x_range=[],
         y_range=[],
-        plot_height=plot_height,
-        plot_width=plot_width,
+        height=plot_height,
+        width=plot_width,
         title=title,
         x_axis_location="below",
         tools="hover",
@@ -134,7 +139,7 @@ def wordcloud_viz(
     word_cnts: pd.Series,
     plot_width: int,
     plot_height: int,
-) -> Panel:
+) -> TabPanel:
     """
     Visualize the word cloud
     """  # pylint: disable=unsubscriptable-object
@@ -151,8 +156,8 @@ def wordcloud_viz(
     view[:] = np.concatenate([wcarr, alpha], axis=2)[::-1]
 
     fig = figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
         title="Word Cloud",
         toolbar_location=None,
         x_range=(0, 1),
@@ -162,7 +167,7 @@ def wordcloud_viz(
 
     fig.axis.visible = False
     fig.grid.visible = False
-    return Panel(child=row(fig), title="Word Cloud")
+    return TabPanel(child=row(fig), title="Word Cloud")
 
 
 def wordfreq_viz(
@@ -171,7 +176,7 @@ def wordfreq_viz(
     plot_width: int,
     plot_height: int,
     wordfreq: WordFrequency,
-) -> Figure:
+) -> figure:
     """
     Visualize the word frequency bar chart
     """
@@ -185,8 +190,8 @@ def wordfreq_viz(
         ("Percent", "@pct{0.2f}%"),
     ]
     fig = figure(
-        plot_height=plot_height,
-        plot_width=plot_width,
+        height=plot_height,
+        width=plot_width,
         title="Word Frequency",
         toolbar_location=None,
         tools="hover",
@@ -204,7 +209,7 @@ def wordfreq_viz(
     fig.yaxis.axis_label = "Count"
     tweak_figure(fig, "bar", True)
     _format_axis(fig, 0, df[col].max(), "y")
-    return Panel(child=row(fig), title="Word Frequency")
+    return TabPanel(child=row(fig), title="Word Frequency")
 
 
 def bar_viz(
@@ -216,21 +221,22 @@ def bar_viz(
     plot_height: int,
     show_yticks: bool,
     bar_cfg: Bar,
-) -> Figure:
+) -> figure:
     """
     Render a bar chart
     """
     # pylint: disable=too-many-arguments
-    df["pct"] = df[col] / nrows * 100
+    df = df.copy()
+    df["pct"] = df[col] / nrows * 100 if nrows else 0.0
     df.index = [str(val) for val in df.index]
 
     tooltips = [(col, "@index"), ("Count", f"@{{{col}}}"), ("Percent", "@pct{0.2f}%")]
     if show_yticks:
         if len(df) > 10:
             plot_width = 28 * len(df)
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         title=col,
         toolbar_location=None,
         tooltips=tooltips,
@@ -264,22 +270,23 @@ def pie_viz(
     plot_width: int,
     plot_height: int,
     pie: Pie,
-) -> Tuple[Panel, List[str]]:
+) -> Tuple[TabPanel, List[str]]:
     """
     Render a pie chart
     """
     # pylint: disable=too-many-arguments
+    df = df.copy()
     npresent = df[col].sum()
-    df.index = list(df.index)  # for CategoricalIndex to normal Index
+    df.index = [str(val) for val in df.index]
     if nrows > npresent:
-        df = df.append(pd.DataFrame({col: [nrows - npresent]}, index=["Others"]))
+        df = pd.concat([df, pd.DataFrame({col: [nrows - npresent]}, index=["Others"])])
     df["pct"] = df[col] / nrows * 100
     df["angle"] = df[col] / nrows * 2 * np.pi
 
     tooltips = [(col, "@index"), ("Count", f"@{{{col}}}"), ("Percent", "@pct{0.2f}%")]
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         title=col,
         toolbar_location=None,
         tools="hover",
@@ -290,8 +297,7 @@ def pie_viz(
     else:
         color_list = list(pie.colors[0 : len(df)])
     df["colour"] = color_list
-    df.index = df.index.astype(str)
-    df.index = df.index.map(lambda x: x[:13] + "..." if len(x) > 13 else x)
+    df.index = [x[:13] + "..." if len(x) > 13 else x for x in df.index]
 
     pie = fig.wedge(
         x=0,
@@ -303,13 +309,13 @@ def pie_viz(
         fill_color="colour",
         source=df,
     )
-    legend = Legend(items=[LegendItem(label=dict(field="index"), renderers=[pie])])
+    legend = Legend(items=[LegendItem(label={"field": "index"}, renderers=[pie])])
     legend.label_text_font_size = "8pt"
     fig.add_layout(legend, "left")
     tweak_figure(fig, "pie")
     fig.axis.major_label_text_font_size = "0pt"
     fig.axis.major_tick_line_color = None
-    return Panel(child=row(fig), title="Pie Chart"), color_list
+    return TabPanel(child=row(fig), title="Pie Chart"), color_list
 
 
 def hist_viz(
@@ -321,7 +327,7 @@ def hist_viz(
     plot_width: int,
     plot_height: int,
     show_yticks: bool,
-) -> Figure:
+) -> figure:
     """
     Render a histogram
     """
@@ -349,17 +355,17 @@ def hist_viz(
         bottom = df["freq"].min() / 2
 
     if yscale == "linear":
-        fig = Figure(
-            plot_height=plot_height,
-            plot_width=plot_width,
+        fig = figure(
+            height=plot_height,
+            width=plot_width,
             title=col,
             toolbar_location=None,
             y_axis_type=yscale,
         )
     else:
-        fig = Figure(
-            plot_height=plot_height,
-            plot_width=plot_width,
+        fig = figure(
+            height=plot_height,
+            width=plot_width,
             title=col,
             toolbar_location=None,
             y_axis_type=yscale,
@@ -395,7 +401,7 @@ def kde_viz(
     plot_width: int,
     plot_height: int,
     kde_cfg: KDE,
-) -> Panel:
+) -> TabPanel:
     """
     Render histogram with overlayed kde
     """
@@ -410,9 +416,9 @@ def kde_viz(
             "dens": dens,
         }
     )
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         title=col,
         toolbar_location=None,
         y_axis_type=kde_cfg.yscale,
@@ -444,7 +450,7 @@ def kde_viz(
     _format_axis(fig, df.iloc[0]["left"], df.iloc[-1]["right"], "x")
     if kde_cfg.yscale == "linear":
         _format_axis(fig, 0, max(df["dens"].max(), pdf.max()), "y")
-    return Panel(child=row(fig), title="KDE Plot")
+    return TabPanel(child=row(fig), title="KDE Plot")
 
 
 def qqnorm_viz(
@@ -455,24 +461,24 @@ def qqnorm_viz(
     plot_width: int,
     plot_height: int,
     qqnorm: QQNorm,
-) -> Panel:
+) -> TabPanel:
     """
     Render a qq plot
     """
     # pylint: disable=too-many-arguments
     theory_qntls = norm.ppf(np.linspace(0.01, 0.99, 99), mean, std)
     tooltips = [("x", "@x"), ("y", "@y")]
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         title=col,
         tools="hover",
         toolbar_location=None,
         tooltips=tooltips,
     )
-    fig.circle(
+    fig.scatter(
         x=theory_qntls,
-        y=qntls,
+        y=np.asarray(qntls, dtype=float),
         size=3,
         color=qqnorm.point_color,
     )
@@ -483,7 +489,26 @@ def qqnorm_viz(
     fig.yaxis.axis_label = f"Quantiles of {col}"
     _format_axis(fig, vals.min(), vals.max(), "x")
     _format_axis(fig, vals.min(), vals.max(), "y")
-    return Panel(child=row(fig), title="Normal Q-Q Plot")
+    return TabPanel(child=row(fig), title="Normal Q-Q Plot")
+
+
+def _bin_edge_ticks(endpts: List[float], nbins: int) -> Tuple[List[str], int]:
+    """Labels for the edges of numeric bins, and the step at which to show them.
+
+    The edges are rounded as coarsely as possible while the shown labels stay distinct.
+    """
+    endpts = [float(ept) for ept in endpts]
+    # start by rounding to the length of the largest possible number
+    round_to = -len(str(max(abs(int(ept)) for ept in endpts)))
+    nticks = nbins // 5 + 1
+    ticks = np.round(endpts, round_to)
+    show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
+    while len(set(show_ticks)) != len(show_ticks) and round_to < 12:  # round until unique
+        round_to += 1
+        ticks = np.round(endpts, round_to)
+        show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
+    ticks = [int(tick) if float(tick).is_integer() else float(tick) for tick in ticks]
+    return _format_ticks(ticks), nticks
 
 
 def box_viz(
@@ -494,27 +519,40 @@ def box_viz(
     box: Box,
     y: Optional[str] = None,
     ttl_grps: Optional[int] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render a box plot visualization
     """
     # pylint: disable=too-many-arguments,too-many-locals,too-many-statements
 
+    df = df.reset_index(drop=True)
+    if len(df) == 0:
+        return TabPanel(
+            child=row(_empty_figure(f"{y} by {x}" if y else f"{x}", plot_height, plot_width)),
+            title="Box Plot",
+        )
     if y and ttl_grps:
         width = 0.7
         grp_cnt_stats = {f"{x}_ttl": ttl_grps, f"{x}_shw": len(df)}
         title = _make_title(grp_cnt_stats, x, y) if ttl_grps else f"{y} by {x}"
+        df["grp"] = [str(grp) for grp in df["grp"]]
     elif y:
         width, title = 0.93, f"{y} by {x}"
-        endpts = [grp.left for grp in df["grp"]] + [df["grp"][len(df) - 1].right]
-        df["grp"] = df["grp"].astype(str)
+        endpts = [grp.left for grp in df["grp"]] + [df["grp"].iloc[-1].right]
+        df["grp"] = [str(grp) for grp in df["grp"]]
     else:
         width, title = 0.7, f"{x}"
+        df["grp"] = [str(grp) for grp in df["grp"]]
     df["x0"], df["x1"] = df.index + 0.2, df.index + 0.8
+    # outliers are drawn separately; lists of unequal length cannot go into the data source
+    otlr_lists = [
+        list(ols) if isinstance(ols, (list, tuple, np.ndarray)) else [] for ols in df["otlrs"]
+    ]
+    df = df.drop(columns=["otlrs"])
 
     fig = figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
         title=title,
         toolbar_location=None,
         x_range=df["grp"],
@@ -542,13 +580,10 @@ def box_viz(
     utail = fig.segment(x0="grp", y0="uw", x1="grp", y1="q3", line_color="black", source=df)
     upw = fig.segment(x0="x0", y0="uw", x1="x1", y1="uw", line_color="black", source=df)
 
-    df.loc[df["otlrs"].isna(), "otlrs"] = pd.Series(
-        [[]] * df["otlrs"].isna().sum(), dtype=np.float64
-    ).values
-    otlrs = [otl for otls in df["otlrs"] for otl in otls]
+    otlrs = [float(otl) for otls in otlr_lists for otl in otls]
     if otlrs:
-        gps = [grp for grp, ols in zip(df["grp"], df["otlrs"]) for _ in range(len(ols))]
-        circ = fig.circle(
+        gps = [grp for grp, ols in zip(df["grp"], otlr_lists) for _ in range(len(ols))]
+        circ = fig.scatter(
             x=gps,
             y=otlrs,
             size=3,
@@ -591,19 +626,9 @@ def box_viz(
 
     if y and not ttl_grps:  # format categorical axis tick values
         # start by rounding to the length of the largest possible number
-        round_to = -len(str(max([abs(int(ept)) for ept in endpts])))
-        ticks = np.round(endpts, round_to)
-        nticks = len(df) // 5 + 1
-        show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
-        while len(set(show_ticks)) != len(show_ticks):  # round until show ticks unique
-            round_to += 1
-            ticks = np.round(endpts, round_to)
-            show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
-        # format the ticks
-        ticks = [int(tick) if tick.is_integer() else tick for tick in ticks]
-        ticks = _format_ticks(ticks)
+        ticks, nticks = _bin_edge_ticks(endpts, len(df))
         fig.xaxis.ticker = list(range(len(df) + 1))
-        fig.xaxis.formatter = FuncTickFormatter(  # overide bokeh ticks
+        fig.xaxis.formatter = CustomJSTickFormatter(  # overide bokeh ticks
             args={"vals": ticks, "mod": nticks},
             code="""
                 if (index % mod == 0) return vals[index];
@@ -613,14 +638,30 @@ def box_viz(
         tweak_figure(fig, "boxnum")
         fig.xaxis.major_label_text_font_size = "10pt"
 
-    return Panel(child=row(fig), title="Box Plot")
+    return TabPanel(child=row(fig), title="Box Plot")
+
+
+_FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+
+
+def _parse_latlong(item: Any) -> Optional[Tuple[float, float]]:
+    """Read a (lat, long) pair from a tuple or a string of decimal degrees."""
+    try:
+        if isinstance(item, (tuple, list)) and len(item) == 2:
+            return float(item[0]), float(item[1])
+        nums = _FLOAT_RE.findall(str(item))
+        if len(nums) == 2:
+            return float(nums[0]), float(nums[1])
+    except (TypeError, ValueError):
+        pass
+    return None
 
 
 def latlong_viz(
     df: pd.DataFrame,
     plot_width: int,
     y: Optional[str] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render a latlong plot visualization
     """
@@ -632,38 +673,45 @@ def latlong_viz(
     tooltip_1 = [("Name", "@name"), ("(Long, Lat)", "($x, $y)")]
     tooltip_2 = [(y, "@sizes_ori")]
 
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_width // 10 * 7,
+    fig = figure(
+        width=plot_width,
+        height=plot_width // 10 * 7,
         # tools=tools,
     )
     fig.grid.grid_line_color = None
-    fig.hover.point_policy = "follow_mouse"
     fig.background_fill_color = "white"
     fig.x_range = Range1d(start=-180, end=180)
     fig.y_range = Range1d(start=-90, end=90)
     world_map = fig.patches("xs", "ys", line_color="white", source=MAPS, line_width=0.5)
     fig.add_tools(HoverTool(renderers=[world_map], tooltips=tooltip_1))
-    lat = [item[0] for item in df.index]
-    lon = [item[1] for item in df.index]
-    minimum = min(df[y])
-    maximum = max(df[y])
-    num_col = (df[y] - minimum) / (maximum - minimum) * 20
-    num_col = num_col.apply(lambda a: a + 5 if a > 0 else a)  # Normalization to {0, [5,25]}
-    source = ColumnDataSource(data=dict(lat=lat, lon=lon, sizes=num_col, sizes_ori=df[y]))
-    my_dots = fig.circle(
+
+    # the index holds the points: (lat, long) tuples or "lat, long" strings
+    points = [_parse_latlong(item) for item in df.index]
+    keep = [pt is not None for pt in points]
+    vals = df[y].to_numpy(dtype=float)[keep]
+    lat = [pt[0] for pt in points if pt is not None]
+    lon = [pt[1] for pt in points if pt is not None]
+    if len(vals):
+        minimum, maximum = np.nanmin(vals), np.nanmax(vals)
+        spread = maximum - minimum
+        sizes = (vals - minimum) / spread * 20 if spread > 0 else np.full(len(vals), 10.0)
+        sizes = np.where(sizes > 0, sizes + 5, sizes)  # Normalization to {0, [5,25]}
+    else:
+        sizes = vals
+    source = ColumnDataSource(data={"lat": lat, "lon": lon, "sizes": sizes, "sizes_ori": vals})
+    my_dots = fig.scatter(
         x="lon", y="lat", size="sizes", fill_color="red", fill_alpha=0.8, source=source
     )
     fig.add_tools(HoverTool(renderers=[my_dots], tooltips=tooltip_2))
 
-    return Panel(child=row(fig), title="Geo Map")
+    return TabPanel(child=row(fig), title="Geo Map")
 
 
 def geo_viz(
     df: pd.DataFrame,
     plot_width: int,
     y: Optional[str] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render a geo plot visualization
     """
@@ -672,31 +720,28 @@ def geo_viz(
 
     # title = f"{y} by {x}"
 
-    minimum = min(df[y])
-    maximum = max(df[y])
+    vals = df[y].to_numpy(dtype=float)
+    minimum = float(np.nanmin(vals)) if len(vals) else 0.0
+    maximum = float(np.nanmax(vals)) if len(vals) else 0.0
 
-    # no_name=[]
     value = {}
-    names = NAME_DICT.keys()
-    for i in range(df[y].shape[0]):
-        if df.index[i].lower().strip() in names:
-            value[NAME_DICT[df.index[i].lower().strip()]] = df[y][i]
-        # else:
-        #     no_name.append(df.index[i])
+    for name, val in zip(df.index, vals):
+        key = str(name).lower().strip()
+        if key in NAME_DICT:
+            value[NAME_DICT[key]] = val
 
-    temp_list = []
-    for itr in range(len(MAPS["name"])):
-        temp_list.append(value.get(MAPS["fip"][itr], "unknown"))
-    MAPS["value"] = temp_list
+    # a private copy of the map data, so that concurrent plots do not interfere
+    maps = dict(MAPS)
+    maps["value"] = [value.get(fip, float("nan")) for fip in MAPS["fip"]]
 
     mapper = LinearColorMapper(
         palette=YlGnBu[33:233], low=minimum, high=maximum, nan_color="#cccccc"
     )
     tools = "pan,wheel_zoom,box_zoom,reset,hover"
 
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_width // 10 * 7,
+    fig = figure(
+        width=plot_width,
+        height=plot_width // 10 * 7,
         tools=tools,
         tooltips=[
             ("Name", "@name"),
@@ -713,7 +758,7 @@ def geo_viz(
         "xs",
         "ys",
         line_color="white",
-        source=MAPS,
+        source=maps,
         fill_color={"field": "value", "transform": mapper},
         line_width=0.5,
     )
@@ -730,7 +775,7 @@ def geo_viz(
     if minimum < maximum:
         fig.add_layout(color_bar, "right")
 
-    return Panel(child=row(fig), title="World Map")
+    return TabPanel(child=row(fig), title="World Map")
 
 
 # this function should be removed when datetime is refactored
@@ -744,7 +789,7 @@ def box_viz_dt(
     y: Optional[str] = None,
     grp_cnt_stats: Optional[Dict[str, int]] = None,
     timeunit: Optional[str] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render a box plot visualization
     """
@@ -763,8 +808,8 @@ def box_viz_dt(
         x_range=list(df["grp"]),
         toolbar_location=None,
         title=title,
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
     )
     utail = fig.segment(x0="grp", y0="uw", x1="grp", y1="q3", line_color="black", source=df)
     ltail = fig.segment(x0="grp", y0="lw", x1="grp", y1="q1", line_color="black", source=df)
@@ -789,8 +834,8 @@ def box_viz_dt(
     loww = fig.segment(x0="x0", y0="lw", x1="x1", y1="lw", line_color="black", source=df)
     upw = fig.segment(x0="x0", y0="uw", x1="x1", y1="uw", line_color="black", source=df)
     if outx:
-        circ = fig.circle(  # pylint: disable=too-many-function-args
-            outx, outy, size=3, line_color="black", color=CATEGORY20[6], fill_alpha=0.6
+        circ = fig.scatter(
+            x=outx, y=outy, size=3, line_color="black", color=CATEGORY20[6], fill_alpha=0.6
         )
         fig.add_tools(
             HoverTool(
@@ -828,20 +873,9 @@ def box_viz_dt(
 
     if not grp_cnt_stats and y and not timeunit:  # format categorical axis tick values
         endpts = list(df["lb"]) + [df.iloc[len(df) - 1]["ub"]]
-        # start by rounding to the length of the largest possible number
-        round_to = -len(str(max([abs(int(ept)) for ept in endpts])))
-        ticks = np.round(endpts, round_to)
-        nticks = len(df) // 5 + 1
-        show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
-        while len(set(show_ticks)) != len(show_ticks):  # round until show ticks unique
-            round_to += 1
-            ticks = np.round(endpts, round_to)
-            show_ticks = [ticks[i] for i in range(len(ticks)) if i % nticks == 0]
-        # format the ticks
-        ticks = [int(tick) if tick.is_integer() else tick for tick in ticks]
-        ticks = _format_ticks(ticks)
+        ticks, nticks = _bin_edge_ticks(endpts, len(df))
         fig.xaxis.ticker = list(range(len(df) + 1))
-        fig.xaxis.formatter = FuncTickFormatter(  # overide bokeh ticks
+        fig.xaxis.formatter = CustomJSTickFormatter(  # overide bokeh ticks
             args={"vals": ticks, "mod": nticks},
             code="""
                 if (index % mod == 0) return vals[index];
@@ -854,7 +888,7 @@ def box_viz_dt(
     if timeunit == "Week of":
         fig.xaxis.axis_label = x + ", the week of"
 
-    return Panel(child=row(fig), title="Box Plot")
+    return TabPanel(child=row(fig), title="Box Plot")
 
 
 def line_viz(
@@ -865,7 +899,7 @@ def line_viz(
     plot_width: int,
     plot_height: int,
     ttl_grps: int,
-) -> Panel:
+) -> TabPanel:
     """
     Render multi-line chart
     """
@@ -875,8 +909,8 @@ def line_viz(
     df.index = df.index.astype(str)
 
     fig = figure(
-        plot_height=plot_height,
-        plot_width=plot_width,
+        height=plot_height,
+        width=plot_width,
         title=title,
         toolbar_location=None,
         tools=[],
@@ -890,7 +924,7 @@ def line_viz(
     # format the bin intervals
     intvls = _format_bin_intervals(bins)
 
-    lns: Dict[str, Figure] = {}
+    lns: Dict[str, figure] = {}
     # add the lines
     for grp, (cnts, _), color in zip(df.index, df[0], palette):
         grp_name = (grp[:14] + "...") if len(grp) > 15 else grp
@@ -908,7 +942,7 @@ def line_viz(
         yvals = [val for cnts, _ in df[0] for val in cnts]
         _format_axis(fig, min(yvals), max(yvals), "y")
 
-    return Panel(child=row(fig), title="Line Chart")
+    return TabPanel(child=row(fig), title="Line Chart")
 
 
 def scatter_viz(
@@ -940,16 +974,16 @@ def scatter_viz(
         title=title,
         toolbar_location=None,
         tooltips=tooltips,
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
     )
-    fig.circle(x, y, color=CATEGORY20[0], source=df)  # pylint: disable=too-many-function-args
+    fig.scatter(x=x, y=y, size=4, color=CATEGORY20[0], source=df)
     tweak_figure(fig)
     fig.xaxis.axis_label = x
     fig.yaxis.axis_label = y
     _format_axis(fig, df[x].min(), df[x].max(), "x")
     _format_axis(fig, df[y].min(), df[y].max(), "y")
-    return Panel(child=fig, title="Scatter Plot")
+    return TabPanel(child=fig, title="Scatter Plot")
 
 
 def hexbin_viz(
@@ -960,7 +994,7 @@ def hexbin_viz(
     plot_height: int,
     tile_size: str,
     aspect_scale: float,
-) -> Panel:
+) -> TabPanel:
     """
     Render a hexbin plot
     """
@@ -984,8 +1018,8 @@ def hexbin_viz(
         match_aspect=False,
         background_fill_color="#f5f5f5",
         toolbar_location=None,
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
     )
 
     palette = list(reversed(VIRIDIS))
@@ -1020,7 +1054,7 @@ def hexbin_viz(
     fig.xaxis.axis_label = x
     fig.yaxis.axis_label = y
 
-    return Panel(child=fig, title="Hexbin Plot")
+    return TabPanel(child=fig, title="Hexbin Plot")
 
 
 def nested_viz(
@@ -1030,7 +1064,7 @@ def nested_viz(
     grp_cnt_stats: Dict[str, int],
     plot_width: int,
     plot_height: int,
-) -> Panel:
+) -> TabPanel:
     """
     Render a nested bar chart
     """
@@ -1040,8 +1074,8 @@ def nested_viz(
     title = _make_title(grp_cnt_stats, x, y)
     plot_width = 19 * len(df) if len(df) > 50 else plot_width
     fig = figure(
-        plot_height=plot_height,
-        plot_width=plot_width,
+        height=plot_height,
+        width=plot_width,
         title=title,
         toolbar_location=None,
         tools="hover",
@@ -1061,7 +1095,7 @@ def nested_viz(
     fig.yaxis.axis_label = "Count"
     fig.xaxis.major_label_orientation = np.pi / 2
     _format_axis(fig, 0, df["cnt"].max(), "y")
-    return Panel(child=fig, title="Nested Bar Chart")
+    return TabPanel(child=fig, title="Nested Bar Chart")
 
 
 def stacked_viz(
@@ -1072,7 +1106,7 @@ def stacked_viz(
     plot_width: int,
     plot_height: int,
     timeunit: Optional[str] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render a stacked bar chart
     """
@@ -1092,8 +1126,8 @@ def stacked_viz(
             plot_width = 32 * len(df)
 
     fig = figure(
-        plot_height=plot_height,
-        plot_width=plot_width,
+        height=plot_height,
+        width=plot_width,
         title=title,
         toolbar_location=None,
         x_range=list(df.index),
@@ -1122,7 +1156,7 @@ def stacked_viz(
     if not timeunit:
         # include percent and count in the tooltip
         formatter = CustomJSHover(
-            args=dict(source=source),
+            args={"source": source},
             code="""
             const cur_bar = special_vars.data_x - 0.5
             const name_cnt = special_vars.name + '_cnt'
@@ -1145,7 +1179,7 @@ def stacked_viz(
     else:
         # below is for having percent and count in the tooltip
         formatter = CustomJSHover(
-            args=dict(source=source),
+            args={"source": source},
             code="""
             const columns = Object.keys(source.data)
             const cur_bar = special_vars.data_x - 0.5
@@ -1179,7 +1213,7 @@ def stacked_viz(
 
     tweak_figure(fig, "stacked")
 
-    return Panel(child=fig, title="Stacked Bar Chart")
+    return TabPanel(child=fig, title="Stacked Bar Chart")
 
 
 def heatmap_viz(
@@ -1189,7 +1223,7 @@ def heatmap_viz(
     grp_cnt_stats: Dict[str, int],
     plot_width: int,
     plot_height: int,
-) -> Panel:
+) -> TabPanel:
     """
     Render a heatmap
     """
@@ -1210,8 +1244,8 @@ def heatmap_viz(
         tools=[],
         x_axis_location="below",
         title=title,
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
     )
 
     renderer = fig.rect(
@@ -1244,13 +1278,13 @@ def heatmap_viz(
     fig.add_layout(color_bar, "right")
 
     tweak_figure(fig, "heatmap")
-    fig.yaxis.formatter = FuncTickFormatter(
+    fig.yaxis.formatter = CustomJSTickFormatter(
         code="""
             if (tick.length > 15) return tick.substring(0, 14) + '...';
             else return tick;
         """
     )
-    return Panel(child=fig, title="Heat Map")
+    return TabPanel(child=fig, title="Heat Map")
 
 
 def dt_line_viz(
@@ -1263,7 +1297,7 @@ def dt_line_viz(
     show_yticks: bool,
     miss_pct: Optional[float] = None,
     y: Optional[str] = None,
-) -> Figure:
+) -> figure:
     """
     Render a line chart
     """
@@ -1276,9 +1310,9 @@ def dt_line_viz(
     else:
         title = f"{title_agg} of {y} by {x}"
         tooltips = [(timeunit, "@lbl"), (title_agg, f"@{df.columns[1]}")]
-    fig = Figure(
-        plot_width=plot_width,
-        plot_height=plot_height,
+    fig = figure(
+        width=plot_width,
+        height=plot_height,
         toolbar_location=None,
         title=title,
         tools=[],
@@ -1307,7 +1341,7 @@ def dt_line_viz(
         fig.yaxis.axis_label = f"{title_agg} of {y}"
         fig.xaxis.axis_label = x
         cap_agg = title_agg.title()
-        return Panel(child=fig, title=f"Line Chart ({cap_agg})")
+        return TabPanel(child=fig, title=f"Line Chart ({cap_agg})")
 
     fig.yaxis.axis_label = "Frequency"
     return fig
@@ -1325,7 +1359,7 @@ def dt_multiline_viz(
     max_lbl_len: int = 15,
     z: Optional[str] = None,
     agg: Optional[str] = None,
-) -> Panel:
+) -> TabPanel:
     """
     Render multi-line chart
     """
@@ -1342,14 +1376,14 @@ def dt_multiline_viz(
         tools=[],
         title=title,
         toolbar_location=None,
-        plot_width=plot_width,
-        plot_height=plot_height,
+        width=plot_width,
+        height=plot_height,
         y_axis_type=yscale,
         x_axis_type="datetime",
     )
 
-    ymin, ymax = np.Inf, -np.Inf
-    plot_dict = dict()
+    ymin, ymax = np.inf, -np.inf
+    plot_dict = {}
     for grp, colour in zip(grps, palette):
         grp_name = (grp[: (max_lbl_len - 1)] + "...") if len(grp) > max_lbl_len else grp
         source = ColumnDataSource({"x": data[grp][1], "y": data[grp][0], "lbl": data[grp][2]})
@@ -1376,7 +1410,12 @@ def dt_multiline_viz(
     if yscale == "linear":
         _format_axis(fig, ymin, ymax, "y")
 
-    return Panel(child=fig, title="Line Chart")
+    return TabPanel(child=fig, title="Line Chart")
+
+
+def _ratio(num: Any, den: Any) -> float:
+    """num / den, or NaN when the denominator is zero."""
+    return float(num) / float(den) if den else float("nan")
 
 
 def format_ov_stats(stats: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]:
@@ -1384,18 +1423,20 @@ def format_ov_stats(stats: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, An
     Render statistics information for distribution grid
     """
     # pylint: disable=too-many-locals
-    nrows, ncols, npresent_cells, nrows_wo_dups, mem_use, dtypes_cnt = stats.values()
+    nrows, ncols = stats["nrows"], stats["ncols"]
+    npresent_cells, nrows_wo_dups = stats["npresent_cells"], stats["nrows_wo_dups"]
+    mem_use, dtypes_cnt = stats["mem_use"], stats["dtype_cnts"]
     ncells = nrows * ncols
 
     data = {
         "Number of Variables": ncols,
         "Number of Rows": nrows,
         "Missing Cells": float(ncells - npresent_cells),
-        "Missing Cells (%)": 1 - (npresent_cells / ncells),
+        "Missing Cells (%)": 1 - _ratio(npresent_cells, ncells),
         "Duplicate Rows": nrows - nrows_wo_dups,
-        "Duplicate Rows (%)": 1 - (nrows_wo_dups / nrows),
+        "Duplicate Rows (%)": 1 - _ratio(nrows_wo_dups, nrows),
         "Total Size in Memory": float(mem_use),
-        "Average Row Size in Memory": mem_use / nrows,
+        "Average Row Size in Memory": _ratio(mem_use, nrows),
     }
     return {k: _format_values(k, v) for k, v in data.items()}, dtypes_cnt
 
@@ -1405,22 +1446,22 @@ def format_num_stats(data: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     Format numerical statistics
     """
     overview = {
-        "Approximate Distinct Count": data["nuniq"],
-        "Approximate Unique (%)": data["nuniq"] / data["npres"],
+        "Distinct Count": data["nuniq"],
+        "Unique (%)": _ratio(data["nuniq"], data["npres"]),
         "Missing": data["nrows"] - data["npres"],
-        "Missing (%)": 1 - (data["npres"] / data["nrows"]),
+        "Missing (%)": 1 - _ratio(data["npres"], data["nrows"]),
         "Infinite": (data["npres"] - data["nreals"]),
-        "Infinite (%)": (data["npres"] - data["nreals"]) / data["nrows"],
+        "Infinite (%)": _ratio(data["npres"] - data["nreals"], data["nrows"]),
         "Memory Size": data["mem_use"],
         "Mean": data["mean"],
         "Minimum": data["min"],
         "Maximum": data["max"],
         "Zeros": data["nzero"],
-        "Zeros (%)": data["nzero"] / data["nrows"],
+        "Zeros (%)": _ratio(data["nzero"], data["nrows"]),
         "Negatives": data["nneg"],
-        "Negatives (%)": data["nneg"] / data["nrows"],
+        "Negatives (%)": _ratio(data["nneg"], data["nrows"]),
     }
-    data["qntls"].index = np.round(data["qntls"].index, 2)
+    data["qntls"].index = np.round(np.asarray(data["qntls"].index, dtype=float), 2)
     quantile = {
         "Minimum": data["min"],
         "5-th Percentile": data["qntls"].loc[0.05],
@@ -1458,10 +1499,10 @@ def format_cat_stats(
     Format categorical statistics
     """
     ov_stats = {
-        "Approximate Distinct Count": stats["nuniq"],
-        "Approximate Unique (%)": stats["nuniq"] / stats["npres"],
+        "Distinct Count": stats["nuniq"],
+        "Unique (%)": _ratio(stats["nuniq"], stats["npres"]),
         "Missing": stats["nrows"] - stats["npres"],
-        "Missing (%)": 1 - stats["npres"] / stats["nrows"],
+        "Missing (%)": 1 - _ratio(stats["npres"], stats["nrows"]),
         "Memory Size": stats["mem_use"],
     }
     sampled_rows = ("1st row", "2nd row", "3rd row", "4th row", "5th row")
@@ -1470,7 +1511,7 @@ def format_cat_stats(
     return {
         "Overview": {k: _format_values(k, v) for k, v in ov_stats.items()},
         "Length": {k: _format_values(k, v) for k, v in len_stats.items()},
-        "Sample": {k: f"{v[:18]}..." if len(v) > 18 else v for k, v in smpl.items()},
+        "Sample": {k: f"{str(v)[:18]}..." if len(str(v)) > 18 else str(v) for k, v in smpl.items()},
         "Letter": {k: _format_values(k, v) for k, v in letter_stats.items()},
     }
 
@@ -1491,7 +1532,7 @@ def render_distribution_grid(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]
     plot_width = cfg.plot.width if cfg.plot.width is not None else 324
     plot_height = cfg.plot.height if cfg.plot.height is not None else 300
 
-    figs: List[Figure] = []
+    figs: List[figure] = []
     htgs: Dict[str, Any] = {}
     nrows = itmdt["stats"]["nrows"]
     titles: List[str] = []
@@ -1560,7 +1601,7 @@ def render_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         plot_height = cfg.plot.height if cfg.plot.height is not None else 400
         plot_width_bar = plot_width
         plot_height_bar = plot_height
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     col, data = itmdt["col"], itmdt["data"]
     # overview, word length, and charater level statistcs
@@ -1581,7 +1622,7 @@ def render_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
             True,
             cfg.bar,
         )
-        tabs.append(Panel(child=row(fig), title="Bar Chart"))
+        tabs.append(TabPanel(child=row(fig), title="Bar Chart"))
         htgs["Bar Chart"] = cfg.bar.how_to_guide(plot_height, plot_width)
     if cfg.pie.enable:
         fig, color_list = pie_viz(
@@ -1616,7 +1657,7 @@ def render_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
             plot_height,
             True,
         )
-        tabs.append(Panel(child=row(length_dist), title="Word Length"))
+        tabs.append(TabPanel(child=row(length_dist), title="Word Length"))
         htgs["Word Length"] = cfg.wordlen.how_to_guide(plot_height, plot_width)
 
     if cfg.value_table.enable:
@@ -1662,7 +1703,7 @@ def render_geo(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         plot_height = cfg.plot.height if cfg.plot.height is not None else 400
         plot_width_bar = plot_width
         plot_height_bar = plot_height
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     col, data = itmdt["col"], itmdt["data"]
     # overview, word length, and charater level statistcs
@@ -1683,7 +1724,7 @@ def render_geo(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
             True,
             cfg.bar,
         )
-        tabs.append(Panel(child=row(fig), title="Bar Chart"))
+        tabs.append(TabPanel(child=row(fig), title="Bar Chart"))
         htgs["Bar Chart"] = cfg.bar.how_to_guide(plot_height, plot_width)
     if cfg.pie.enable:
         fig, color_list = pie_viz(
@@ -1878,7 +1919,7 @@ def render_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         plot_width_hist = plot_width
         plot_height_hist = plot_height
     col, data = itmdt["col"], itmdt["data"]
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
 
     if cfg.hist.enable:
@@ -1892,7 +1933,7 @@ def render_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
             plot_height_hist,
             True,
         )
-        tabs.append(Panel(child=row(fig), title="Histogram"))
+        tabs.append(TabPanel(child=row(fig), title="Histogram"))
         htgs["Histogram"] = cfg.hist.how_to_guide(plot_height, plot_width)
     if cfg.kde.enable:
         # when the column is constant, we wont display kde plot
@@ -2009,14 +2050,14 @@ def render_dt(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         plot_width = cfg.plot.width if cfg.plot.width is not None else 450
         plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     if cfg.line.enable:
         df, timeunit, miss_pct = itmdt["line"]
         fig = dt_line_viz(
             df, itmdt["col"], timeunit, cfg.line.yscale, plot_width, plot_height, True, miss_pct
         )
         fig.frame_width = int(plot_width * 0.95)
-        tabs.append(Panel(child=fig, title="Line Chart"))
+        tabs.append(TabPanel(child=fig, title="Line Chart"))
     return {
         "tabledata": stats_viz_dt(itmdt["data"]) if cfg.stats.enable else [],
         "insights": None,
@@ -2033,22 +2074,19 @@ def render_cat_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 450
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     data, x, y = itmdt["data"], itmdt["x"], itmdt["y"]
 
     if cfg.box.enable:
         # box plot
-        df = data["box"].to_frame().reset_index()[: 5 * cfg.box.ngroups]
-        df = df.pivot(index=x, columns="level_1", values=[0]).reset_index()
-        df.columns = df.columns.get_level_values(1)
-        df.columns = ["grp"] + list(df.columns[1:])
+        df = data["box"].head(cfg.box.ngroups)
         tabs.append(box_viz(df, x, plot_width, plot_height, cfg.box, y, data["ttl_grps"]))
         htgs["Box Plot"] = cfg.box.nom_cont_how_to_guide(plot_height, plot_width)
 
     if cfg.line.enable:
         # multiline plot
-        df = data["hist"].to_frame()[: cfg.line.ngroups]
+        df = data["hist"].head(cfg.line.ngroups).copy()
         tabs.append(
             line_viz(
                 df,
@@ -2079,22 +2117,19 @@ def render_geo_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 450
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     data, x, y = itmdt["data"], itmdt["x"], itmdt["y"]
 
     if cfg.box.enable:
         # box plot
-        df = data["box"].to_frame().reset_index()[: 5 * cfg.box.ngroups]
-        df = df.pivot(index=x, columns="level_1", values=[0]).reset_index()
-        df.columns = df.columns.get_level_values(1)
-        df.columns = ["grp"] + list(df.columns[1:])
+        df = data["box"].head(cfg.box.ngroups)
         tabs.append(box_viz(df, x, plot_width, plot_height, cfg.box, y, data["ttl_grps"]))
         htgs["Box Plot"] = cfg.box.nom_cont_how_to_guide(plot_height, plot_width)
 
     if cfg.line.enable:
         # multiline plot
-        df = data["hist"].to_frame()[: cfg.line.ngroups]
+        df = data["hist"].head(cfg.line.ngroups).copy()
         tabs.append(
             line_viz(
                 df,
@@ -2128,7 +2163,7 @@ def render_latlong_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     """
     plot_width = cfg.plot.width if cfg.plot.width is not None else 450
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     data, y = itmdt["data"], itmdt["y"]
 
     df = data["value"].to_frame()
@@ -2152,7 +2187,7 @@ def render_two_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 450
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     data, x, y = itmdt["data"], itmdt["x"], itmdt["y"]
 
@@ -2198,11 +2233,7 @@ def render_two_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
         htgs["Hexbin Plot"] = cfg.hexbin.how_to_guide(tile_size, plot_height, plot_width)
     if cfg.box.enable:
         # box plot
-        df = data["box"].to_frame().reset_index()
-        df = df.pivot(index="grp", columns="level_1", values=[0]).reset_index()
-        df.columns = df.columns.get_level_values(1)
-        df.columns = ["grp"] + list(df.columns[1:])
-        tabs.append(box_viz(df, x, plot_width, plot_height, cfg.box, y))
+        tabs.append(box_viz(data["box"], x, plot_width, plot_height, cfg.box, y))
         htgs["Box Plot"] = cfg.box.two_cont_how_to_guide(plot_height, plot_width)
 
     for panel in tabs:
@@ -2226,7 +2257,7 @@ def render_two_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 972
     plot_height = cfg.plot.height if cfg.plot.height is not None else 300
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     htgs: Dict[str, List[Tuple[str, str]]] = {}
     df = itmdt["data"].to_frame("cnt").reset_index()
     x, y = itmdt["x"], itmdt["y"]
@@ -2314,9 +2345,9 @@ def parse_grps(
     }
     if df.empty:
         size = min(len(x_lrgst), len(y_lrgst))
-        df = pd.DataFrame({x: x_lrgst[:size], y: y_lrgst[:size]})
+        df = pd.DataFrame({x: list(x_lrgst.index[:size]), y: list(y_lrgst.index[:size])})
         df["cnt"] = 0
-    df[[x, y]] = df[[x, y]].astype(str)
+    df = df.assign(**{x: df[x].map(str), y: df[y].map(str)})
     # final format
     df = df.pivot_table(index=y, columns=x, values="cnt", fill_value=0, aggfunc="sum")
     df = df.unstack().to_frame("cnt").reset_index()
@@ -2331,7 +2362,7 @@ def render_dt_num(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 450
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     if cfg.line.enable:
         linedf_agg, timeunit = itmdt["linedata_agg"]
         tabs.append(
@@ -2390,7 +2421,7 @@ def render_dt_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 972
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     if cfg.line.enable:
         data, grp_cnt_stats, timeunit = itmdt["linedata"]
         tabs.append(
@@ -2433,7 +2464,7 @@ def render_dt_num_cat(itmdt: Intermediate, cfg: Config) -> Dict[str, Any]:
     plot_width = cfg.plot.width if cfg.plot.width is not None else 972
     plot_height = cfg.plot.height if cfg.plot.height is not None else 400
 
-    tabs: List[Panel] = []
+    tabs: List[TabPanel] = []
     data, grp_cnt_stats, timeunit = itmdt["data"]
     tabs.append(
         dt_multiline_viz(

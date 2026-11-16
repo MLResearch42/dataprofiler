@@ -3,21 +3,28 @@
 """
 
 import warnings
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Union
 
-from collections import defaultdict
 import pandas as pd
-from bokeh.resources import INLINE
-from jinja2 import Environment, PackageLoader
+from jinja2 import ChoiceLoader, Environment, PackageLoader
 
-from .diff_formatter import format_diff_report
 from ..configs import Config
+from ..container import bokeh_resources
 from ..create_report.report import Report
+from ..diff import sample_each
+from .diff_formatter import format_diff_report
 
 __all__ = ["create_diff_report"]
 
 ENV_LOADER = Environment(
-    loader=PackageLoader("dataprep", "eda/create_diff_report/templates"),
+    loader=ChoiceLoader(
+        [
+            PackageLoader("dataprep", "eda/create_diff_report/templates"),
+            PackageLoader("dataprep", "eda/templates"),  # shared notebook-frame script
+        ]
+    ),
+    autoescape=False,
 )
 
 
@@ -28,6 +35,8 @@ def create_diff_report(
     title: Optional[str] = "DataPrep Report",
     mode: Optional[str] = "basic",
     progress: bool = True,
+    *,
+    sample: Union[int, float, None] = None,
 ) -> Report:
     """
     This function is to generate and render elements in a report object given multiple dataframes.
@@ -50,19 +59,24 @@ def create_diff_report(
         Currently only the 'basic' is fully implemented.
     progress
         Whether to show the progress bar.
+    sample
+        Compare random samples of the rows: a number of rows (int) or a fraction
+        of the rows (float), taken from each DataFrame. The samples are the same
+        on every run, and the report says that it shows samples.
 
     Examples
     --------
-    from dataprep.datasets import load_dataset
-    from dataprep.eda import create_diff_report
-    df_train = load_dataset('house_prices_train')
-    df_test = load_dataset('house_prices_test')
-    create_diff_report([df_train, df_test]) # show in browser on jupyter notebook
+    >>> from dataprep.datasets import load_dataset
+    >>> from dataprep.eda import create_diff_report
+    >>> df_train = load_dataset('house_prices_train')
+    >>> df_test = load_dataset('house_prices_test')
+    >>> create_diff_report([df_train, df_test])  # doctest: +SKIP
     """
     # pylint: disable=too-many-arguments
 
     _suppress_warnings()
     cfg = Config.from_dict(display, config)
+    df_list, sample_note = sample_each(df_list, sample)
 
     components = format_diff_report(df_list, cfg, mode, progress)
 
@@ -74,13 +88,14 @@ def create_diff_report(
                 dict_stats[key].append(value)
 
     context = {
-        "resources": INLINE.render(),
+        "resources": bokeh_resources(widgets=True),
         "title": title,
         "stats": dict_stats,
         "components": components,
         "is_diff_report": True,
         "df_labels": cfg.diff.label,
         "legend_labels": components["legend_lables"],
+        "sample_note": sample_note,
     }
 
     # {% for div in value.plots[1] %}

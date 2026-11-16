@@ -1,3 +1,5 @@
+{{ context.resources }}
+
 {{ context.components.graphs[0] }}
 
 {% for var in context.components.dfs[0].variables.values() %}
@@ -27,7 +29,6 @@
             //return '{{ context.components.dfs[0].variables|list }}';
             return originalVariables;
         }
-        console.log(getOriginalVariables)
     }
 
     function sortBy(e){
@@ -107,10 +108,10 @@
             let tbValue = i.lastElementChild.innerHTML;
             if (!isNaN(tbValue)) {
                 if (tbValue.includes('e+')) {
-                    let newValue = tbValue.replace('e+', '×10<sup>') + '</sup>';
+                    let newValue = tbValue.replace('e+', '&times;10<sup>') + '</sup>';
                     i.lastElementChild.innerHTML = newValue;
                 } else if (tbValue.includes('e-')) {
-                    let newValue = tbValue.replace('e', '×10<sup>') + '</sup>';
+                    let newValue = tbValue.replace('e', '&times;10<sup>') + '</sup>';
                     i.lastElementChild.innerHTML = newValue;
                 }
             }

@@ -3,7 +3,8 @@ Implement numerical standard scaler.
 """
 
 from typing import Any, Union
-import dask.dataframe as dd
+
+import pandas as pd
 
 
 class StandardScaler:
@@ -26,7 +27,7 @@ class StandardScaler:
         self.mean = 0
         self.std = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Extract mean value and std value for Standard Scaler according to the provided column.
 
@@ -38,9 +39,12 @@ class StandardScaler:
 
         self.mean = col_df.mean()
         self.std = col_df.std()
+        # a constant column has no spread: it is scaled to 0 instead of dividing by zero
+        if not self.std > 0:
+            self.std = 1
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Transform the provided data column with the extracted mean value and std value.
 
@@ -53,7 +57,7 @@ class StandardScaler:
         result = col_df.map(self.compute_val)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """ "
         Extract mean value and std value for Standard Scaler according to the provided column.
         Transform the provided data column with the extracted mean value and std value.

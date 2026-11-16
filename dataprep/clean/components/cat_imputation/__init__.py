@@ -3,8 +3,8 @@ Initialize dictionary of categorical imputers.
 """
 
 from .constant_imputer import ConstantImputer
-from .most_frequent_imputer import MostFrequentImputer
 from .drop_imputer import DropImputer
+from .most_frequent_imputer import MostFrequentImputer
 
 operator_dic = {
     "constant": ConstantImputer,

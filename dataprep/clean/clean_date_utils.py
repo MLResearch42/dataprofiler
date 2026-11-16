@@ -6,10 +6,13 @@ Common definitions and classes for the clean_date function.
 
 import datetime
 from typing import Dict, List, Union
+from zoneinfo import available_timezones
 
-from pytz import all_timezones
+from .utils import is_null
 
-from .utils import NULL_VALUES
+# The IANA time zone names known to this machine (system tz database and/or the
+# tzdata package), e.g. "America/Vancouver"
+ALL_TIMEZONES = frozenset(available_timezones())
 
 JUMP = [
     " ",
@@ -351,7 +354,7 @@ class ParsedDate:
             value of offset minutes
         """
         if timezone != "":
-            if timezone in all_timezones or timezone in ZONE:
+            if timezone in ALL_TIMEZONES or timezone in ZONE:
                 self.tzinfo["timezone"] = timezone
             else:
                 self.valid = "unknown"
@@ -603,7 +606,7 @@ def check_date(date: str, clean: bool) -> Union[str, bool]:
     date
         date string
     """
-    if date in NULL_VALUES:
+    if is_null(date):
         return "null" if clean else False
     date = str(date)
     tokens = split(date, JUMP)
@@ -611,7 +614,7 @@ def check_date(date: str, clean: bool) -> Union[str, bool]:
 
     # Handle timezone
     for token in tokens:
-        if token in all_timezones or token in ZONE:
+        if token in ALL_TIMEZONES or token in ZONE:
             remain_tokens.remove(token)
     invalid_judge = not remain_tokens
     if invalid_judge:

@@ -3,12 +3,11 @@ Computations for plot(df, ...)
 """
 
 import warnings
-from typing import Optional, Union, List, Dict, Any, Tuple
-import dask.dataframe as dd
-import pandas as pd
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ...configs import Config
-from ...dtypes_v2 import DTypeDef, LatLong
+from ...dtypes import DTypeDef, LatLong
+from ...eda_frame import DataFrame
 from ...intermediate import Intermediate
 from .bivariate import compute_bivariate
 from .overview import compute_overview
@@ -19,7 +18,7 @@ __all__ = ["compute"]
 
 
 def compute(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     col1: Optional[Union[str, LatLong]] = None,
     col2: Optional[Union[str, LatLong]] = None,
     col3: Optional[str] = None,

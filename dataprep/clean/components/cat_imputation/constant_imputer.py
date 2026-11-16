@@ -4,7 +4,10 @@ Implement categorical constant imputer.
 
 # pylint: disable=unused-argument
 from typing import Any, List, Optional
-import dask.dataframe as dd
+
+import pandas as pd
+
+from ...utils import in_null_values
 
 
 class ConstantImputer:
@@ -29,12 +32,12 @@ class ConstantImputer:
         """
 
         self.null_values = null_values
-        if len(fill_value) == "":
+        if len(fill_value) == 0:
             self.fill_value = "Missing"
         else:
             self.fill_value = fill_value
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Constant imputer don't need to fit any parameter.
 
@@ -46,7 +49,7 @@ class ConstantImputer:
 
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Impute the provided data column with the fitted parameters.
 
@@ -59,7 +62,7 @@ class ConstantImputer:
         result = col_df.map(self.fillna)
         return result
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Impute the data column with constant value.
 
@@ -80,10 +83,9 @@ class ConstantImputer:
         Parameters
         ----------
         val
-            Each value in dask's Series
+            Each value in the pandas Series
         """
 
-        if not self.null_values is None:
-            if val in self.null_values:
-                return self.fill_value
+        if in_null_values(val, self.null_values):
+            return self.fill_value
         return val

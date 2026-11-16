@@ -3,8 +3,7 @@ Implement numerical variance thresholder.
 """
 
 from typing import Any, Union
-from dask import dataframe as dd
-from dask.dataframe import from_pandas
+
 import pandas as pd
 
 
@@ -29,7 +28,7 @@ class VarThreholder:
         self.variance_thresh = variance
         self.variance = 0
 
-    def fit(self, col_df: dd.Series) -> Any:
+    def fit(self, col_df: pd.Series) -> Any:
         """
         Extract the variance of the provided column.
 
@@ -42,7 +41,7 @@ class VarThreholder:
         self.variance = col_df.var()
         return self
 
-    def transform(self, col_df: dd.Series) -> dd.Series:
+    def transform(self, col_df: pd.Series) -> pd.Series:
         """
         Check if variance of provided column is larger than threshold.
         If yes, then keep the provided column
@@ -56,9 +55,9 @@ class VarThreholder:
 
         if self.variance > self.variance_thresh:
             return col_df
-        return from_pandas(pd.Series([]), npartitions=2)
+        return pd.Series([], dtype=col_df.dtype, name=col_df.name)
 
-    def fit_transform(self, col_df: dd.Series) -> dd.Series:
+    def fit_transform(self, col_df: pd.Series) -> pd.Series:
         """
         Extract the variance of the provided column.
         Check if variance of provided column is larger than threshold.

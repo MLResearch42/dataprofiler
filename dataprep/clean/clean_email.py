@@ -2,17 +2,29 @@
 Clean and validate a DataFrame column containing email addresses.
 """
 
-import re
-from operator import itemgetter
-from typing import Any, Union
+from __future__ import annotations
 
-import dask
-import dask.dataframe as dd
+import re
+from functools import partial
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
-from .utils import NEARBYKEYS, NULL_VALUES, create_report_new, to_dask
+from .utils import (
+    NEARBYKEYS,
+    check_dataframe,
+    check_errors,
+    clean_column,
+    create_report_new,
+    is_null,
+    validate_values,
+)
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
+
+WHITESPACE_REGEX = re.compile(r"(\s|\u180B|\u200B|\u200C|\u200D|\u2060|\uFEFF)+")
 
 USER_REGEX = re.compile(
     # dot-atom
@@ -205,7 +217,7 @@ DOMAINS = {
 
 
 def clean_email(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     remove_whitespace: bool = False,
     fix_domain: bool = False,
@@ -284,8 +296,7 @@ def clean_email(
     # pylint: disable=too-many-arguments
 
     # check if the parameters are of correct processing types and values
-    if not isinstance(df, (pd.DataFrame, dd.DataFrame)):
-        raise ValueError("df is invalid, it needs to be a pandas or Dask DataFrame.")
+    check_dataframe(df)
 
     if not isinstance(column, str):
         raise ValueError(f"column {column} is invalid.")
@@ -304,45 +315,23 @@ def clean_email(
     if not isinstance(report, bool):
         raise ValueError(f"report {report} is invalid, it needs to be True or False.")
 
-    if errors not in {"coerce", "ignore", "raise"}:
-        raise ValueError(
-            f'errors {errors} is invalid, it needs to be "coerce", "ignore", or "raise".'
-        )
+    check_errors(errors)
 
-    # convert to dask
-    df = to_dask(df)
-
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format_email(x, split, remove_whitespace, fix_domain, errors) for x in srs],
-        meta=object,
+    new_columns = ["username", "domain"] if split else [f"{column}_clean"]
+    df, stats = clean_column(
+        df,
+        column,
+        partial(
+            _format_email,
+            split=split,
+            remove_whitespace=remove_whitespace,
+            fix_domain=fix_domain,
+            errors=errors,
+        ),
+        new_columns,
+        inplace=inplace,
+        progress=progress,
     )
-
-    if split:
-        df = df.assign(
-            username=df["clean_code_tup"].map(itemgetter(0)),
-            domain=df["clean_code_tup"].map(itemgetter(1)),
-            _code_=df["clean_code_tup"].map(itemgetter(2), meta=("_code_", object)),
-        )
-    else:
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-        )
-        df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
 
     # output a report describing the result of clean_email
     if report:
@@ -351,7 +340,7 @@ def clean_email(
     return df
 
 
-def validate_email(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
+def validate_email(x: str | pd.Series) -> bool | pd.Series:
     """
     Validate email addresses.
 
@@ -374,9 +363,7 @@ def validate_email(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
     Name: email, dtype: bool
     """
 
-    if isinstance(x, pd.Series):
-        return x.apply(_check_email, clean=False)
-    return _check_email(x, False)
+    return validate_values(x, partial(_check_email, clean=False))
 
 
 def _format_email(
@@ -387,7 +374,7 @@ def _format_email(
     """
     # pre-cleaning email text by removing all whitespaces
     if remove_whitespace:
-        val = re.sub(r"(\s|\u180B|\u200B|\u200C|\u200D|\u2060|\uFEFF)+", "", str(val))
+        val = WHITESPACE_REGEX.sub("", str(val))
 
     valid_type = _check_email(val, True)
 
@@ -413,7 +400,7 @@ def _check_email(val: Any, clean: bool) -> Any:
     Function to check whether a value is a valid email.
     """
     # pylint: disable=too-many-return-statements
-    if val in NULL_VALUES:
+    if is_null(val):
         return "null" if clean else False
 
     val = str(val)
@@ -473,15 +460,13 @@ def _not_email(val: Any, split: bool, errtype: str, processtype: str) -> Any:
     """
     Return result when value unable to be parsed.
     """
-    if processtype == "coerce":
-        if split:
-            return (np.nan, np.nan, 0) if errtype == "null" else (np.nan, np.nan, 1)
-        return (np.nan, 0) if errtype == "null" else (np.nan, 1)
-    elif processtype == "ignore":
-        if split:
-            return (val, np.nan, 0) if errtype == "null" else (val, np.nan, 1)
-        return (val, 0) if errtype == "null" else (val, 1)
-    elif processtype == "raise":
+    if errtype == "null":
+        # null values are not errors: they are returned as they are if errors is
+        # "ignore", and as NaN otherwise
+        result = val if processtype == "ignore" else np.nan
+        return (result, np.nan, 0) if split else (result, 0)
+
+    if processtype == "raise":
         raise ValueError(f"unable to parse value {val}")
-    else:
-        raise ValueError("invalid error processing type")
+    result = val if processtype == "ignore" else np.nan
+    return (result, np.nan, 1) if split else (result, 1)

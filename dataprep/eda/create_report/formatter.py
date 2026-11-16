@@ -2,49 +2,48 @@
 for create_report(df) function."""  # pylint: disable=line-too-long,
 
 import sys
-from typing import Any, Dict, List, Optional, Tuple, Union
-from warnings import catch_warnings, filterwarnings
+from typing import Any, Dict, List, Optional, Tuple
+from warnings import catch_warnings, simplefilter
 
-import dask
-import dask.dataframe as dd
 import pandas as pd
-from bokeh.embed import components
-from bokeh.plotting import Figure
+from bokeh.plotting import figure
+
 from ..configs import Config
 from ..correlation import render_correlation
 from ..correlation.compute.overview import correlation_nxn
 from ..distribution import compute, render
-from ..utils import _calc_line_dt
-from ..distribution.compute.overview import calc_stats
-from ..distribution.compute.univariate import calc_stats_dt, cont_comps, nom_comps
-from ..distribution.render import format_cat_stats, format_num_stats, format_ov_stats, stats_viz_dt
 from ..distribution.compute.overview import (
-    _nom_calcs,
     _cont_calcs,
-    _format_nom_ins,
     _format_cont_ins,
+    _format_nom_ins,
     _format_ov_ins,
     _insight_pagination,
+    _nom_calcs,
+    calc_stats,
 )
-from ..dtypes_v2 import (
+from ..distribution.compute.univariate import calc_stats_dt, cont_comps, nom_comps
+from ..distribution.render import format_cat_stats, format_num_stats, format_ov_stats, stats_viz_dt
+from ..dtypes import (
     Continuous,
     DateTime,
-    Nominal,
     GeoGraphy,
     GeoPoint,
+    Nominal,
     SmallCardNum,
 )
-from ..eda_frame import EDAFrame
+from ..eda_frame import DataFrame, EDAFrame
+from ..embed import components
 from ..intermediate import Intermediate
 from ..missing import render_missing
 from ..missing.compute.nullivariate import compute_missing_nullivariate
-from ...progress_bar import ProgressBar
+from ..parallel import Progress, pmap
+from ..utils import _calc_line_dt, sample_frame
 
 # pylint: disable=E1133
 
 
 def format_report(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     cfg: Config,
     mode: Optional[str],
     progress: bool = True,
@@ -70,18 +69,13 @@ def format_report(
         A dictionary in which formatted data will be stored.
         This variable acts like an API in passing data to the template engine.
     """
-    if len(df.index) == 0:
-        return {}
-    with ProgressBar(minimum=1, disable=not progress):
-        if mode == "basic":
-            edaframe = EDAFrame(df)
-            comps = format_basic(edaframe, cfg)
-        # elif mode == "full":
-        #     comps = format_full(df)
-        # elif mode == "minimal":
-        #     comps = format_mini(df)
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
+    if mode != "basic":
+        raise ValueError(f"Unknown mode: {mode!r}. Only 'basic' is supported.")
+    with Progress(enabled=progress, desc="Report"):
+        edaframe = EDAFrame(df)
+        if edaframe.shape[0] == 0 or edaframe.shape[1] == 0:
+            return {}
+        comps = format_basic(edaframe, cfg)
     return comps
 
 
@@ -101,7 +95,7 @@ def _format_variables(df: EDAFrame, cfg: Config, data: Dict[str, Any]) -> Dict[s
             if isinstance(dtp, Continuous):
                 itmdt = Intermediate(col=col, data=data[col], visual_type="numerical_column")
                 stats = format_num_stats(data[col])
-            elif type(dtp) in [Nominal, SmallCardNum, GeoGraphy, GeoPoint]:
+            elif isinstance(dtp, (Nominal, SmallCardNum, GeoGraphy, GeoPoint)):
                 itmdt = Intermediate(col=col, data=data[col], visual_type="categorical_column")
                 stats = format_cat_stats(
                     data[col]["stats"], data[col]["len_stats"], data[col]["letter_stats"]
@@ -119,7 +113,7 @@ def _format_variables(df: EDAFrame, cfg: Config, data: Dict[str, Any]) -> Dict[s
 
             rndrd = render(itmdt, cfg)
             layout = rndrd["layout"]
-            figs_var: List[Figure] = []
+            figs_var: List[figure] = []
             for tab in layout:
                 try:
                     fig = tab.children[0]
@@ -190,7 +184,7 @@ def _format_correlation(data: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
             )
             rndrd = render_correlation(itmdt, cfg)
             res["correlation_names"] = []
-            figs_corr: List[Figure] = []
+            figs_corr: List[figure] = []
             # pylint: disable = not-an-iterable
             for tab in rndrd.tabs:
                 fig = tab.child
@@ -216,7 +210,7 @@ def _format_missing(
         itmdt = completions["miss"](data["miss"])
 
         rndrd = render_missing(itmdt, cfg)
-        figs_missing: List[Figure] = []
+        figs_missing: List[figure] = []
         for fig in rndrd["layout"]:
             fig.sizing_mode = "stretch_both"
             figs_missing.append(fig)
@@ -239,7 +233,7 @@ def _format_overview(data: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
         for col, dtp, dat in data["insights"]:
             if isinstance(dtp, Continuous):
                 ins = _format_cont_ins(col, dat, data["ov"]["nrows"], cfg)[1]
-            elif type(dtp) in [Nominal, SmallCardNum, GeoGraphy, GeoPoint]:
+            elif isinstance(dtp, (Nominal, SmallCardNum, GeoGraphy, GeoPoint)):
                 ins = _format_nom_ins(col, dat, data["ov"]["nrows"], cfg)[1]
             else:
                 continue
@@ -272,20 +266,10 @@ def format_basic(df: EDAFrame, cfg: Config) -> Dict[str, Any]:
     # pylint: disable=too-many-locals,too-many-statements,too-many-branches
     # aggregate all computations
 
-    setattr(getattr(cfg, "plot"), "report", True)
-    data, completions = basic_computations(df, cfg)
+    cfg.plot.report = True
     with catch_warnings():
-        filterwarnings(
-            "ignore",
-            "invalid value encountered in true_divide",
-            category=RuntimeWarning,
-        )
-        filterwarnings(
-            "ignore",
-            "overflow encountered in long_scalars",
-            category=RuntimeWarning,
-        )
-        (data,) = dask.compute(data)
+        simplefilter("ignore", RuntimeWarning)
+        data, completions = basic_computations(df, cfg)
 
     res_overview = _format_overview(data, cfg)
     res_variables = _format_variables(df, cfg, data)
@@ -299,65 +283,61 @@ def format_basic(df: EDAFrame, cfg: Config) -> Dict[str, Any]:
 
 def _compute_variables(df: EDAFrame, cfg: Config) -> Dict[str, Any]:
     """Computation of Variables section."""
-    data: Dict[str, Any] = {}
-    # variables
-    if cfg.variables.enable:
-        for col in df.columns:
-            try:
-                dtype = df.get_eda_dtype(col)
-                # Since it will throw error if a numerical column is all-nan,
-                # we transform it to categorical column.
-                # We also transform to categorical for small cardinality numerical column.
-                if df.get_missing_cnt(col) == df.shape[0]:
-                    srs = df.get_col_as_str(col, na_as_str=True)
-                    data[col] = nom_comps(srs, cfg)
-                elif isinstance(dtype, (Nominal, GeoGraphy, GeoPoint)):
-                    data[col] = nom_comps(df.frame[col], cfg)
-                elif isinstance(dtype, SmallCardNum):
-                    srs = df.get_col_as_str(col, na_as_str=False)
-                    data[col] = nom_comps(srs, cfg)
-                elif isinstance(dtype, Continuous):
-                    data[col] = cont_comps(df.frame[col], cfg)
-                elif isinstance(dtype, DateTime):
-                    data[col] = {}
-                    data[col]["stats"] = calc_stats_dt(df.frame[col])
-                    data[col]["line"] = dask.delayed(_calc_line_dt)(df.frame[[col]], "auto")
-                else:
-                    raise ValueError(f"unprocessed type in column{col}:{dtype}")
-            except:
-                print(f"error happended in column:{col}", file=sys.stderr)
-                raise
-    return data
+    if not cfg.variables.enable:
+        return {}
+
+    def one(col: str) -> Any:
+        try:
+            dtype = df.get_eda_dtype(col)
+            # An all-missing column cannot be summarised as numbers or dates,
+            # so it is shown as a categorical column whose only value is "nan".
+            if df.get_missing_cnt(col) == df.shape[0]:
+                return nom_comps(df.get_col_as_str(col, na_as_str=True), cfg)
+            if isinstance(dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum)):
+                return nom_comps(df.get_col_as_str(col, na_as_str=False), cfg)
+            if isinstance(dtype, Continuous):
+                return cont_comps(df.frame[col], cfg)
+            if isinstance(dtype, DateTime):
+                return {
+                    "stats": calc_stats_dt(df.frame[col]),
+                    "line": _calc_line_dt(df.frame[[col]], "auto"),
+                }
+            raise ValueError(f"unprocessed type in column{col}:{dtype}")
+        except Exception:
+            print(f"error happened in column: {col}", file=sys.stderr)
+            raise
+
+    cols = list(df.columns)
+    return dict(zip(cols, pmap(one, cols, labels=cols)))
+
+
+def _is_all_missing(df: EDAFrame, col: str) -> bool:
+    return df.get_missing_cnt(col) == df.shape[0]
 
 
 def _compute_overview(df: EDAFrame, cfg: Config) -> Dict[str, Any]:
     """Computation of Overview section."""
     data: Dict[str, Any] = {}
-    # overview
-    if cfg.overview.enable:
-        data["ov"] = calc_stats(df, cfg)
-        data["insights"] = []
-        for col in df.columns:
-            col_dtype = df.get_eda_dtype(col)
+    if not cfg.overview.enable:
+        return data
 
-            # when srs is full NA, the column type will be float
-            # and need to be transformed into str.
-            if df.get_missing_cnt(col) == df.shape[0]:
-                srs = df.get_col_as_str(col, na_as_str=False).dropna().astype(str)
-                data["insights"].append((col, Nominal(), _nom_calcs(srs, cfg)))
-            elif isinstance(col_dtype, Continuous):
-                data["insights"].append(
-                    (col, Continuous(), _cont_calcs(df.frame[col].dropna(), cfg))
-                )
-            elif isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum)):
-                srs = df.get_col_as_str(col, na_as_str=False).dropna()
-                data["insights"].append((col, Nominal(), _nom_calcs(srs, cfg)))
-            elif isinstance(col_dtype, DateTime):
-                data["insights"].append(
-                    (col, DateTime(), dask.delayed(_calc_line_dt)(df.frame[[col]], cfg.line.unit))
-                )
-            else:
-                raise RuntimeError(f"unprocessed data type: col:{col}, dtype: {type(col_dtype)}")
+    def one(col: str) -> Any:
+        col_dtype = df.get_eda_dtype(col)
+        if _is_all_missing(df, col):
+            srs = df.get_col_as_str(col, na_as_str=False).dropna().astype(object)
+            return col, Nominal(), _nom_calcs(srs, cfg)
+        if isinstance(col_dtype, Continuous):
+            return col, Continuous(), _cont_calcs(df.frame[col].dropna(), cfg)
+        if isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum)):
+            srs = df.get_col_as_str(col, na_as_str=False).dropna()
+            return col, Nominal(), _nom_calcs(srs, cfg)
+        if isinstance(col_dtype, DateTime):
+            return col, DateTime(), None
+        raise RuntimeError(f"unprocessed data type: col:{col}, dtype: {type(col_dtype)}")
+
+    data["ov"] = calc_stats(df, cfg)
+    cols = list(df.columns)
+    data["insights"] = pmap(one, cols, labels=cols)
     return data
 
 
@@ -393,13 +373,8 @@ def basic_computations(
     data["all_cols"] = df.columns
     # interactions
     if cfg.interactions.enable:
-        if cfg.scatter.sample_size is not None:
-            sample_func = lambda x: x.sample(n=min(cfg.scatter.sample_size, x.shape[0]))
-        else:
-            sample_func = lambda x: x.sample(frac=cfg.scatter.sample_rate)
-        data["interaction.scatter_source"] = df_num.frame.map_partitions(
-            sample_func,
-            meta=df_num.frame,
+        data["interaction.scatter_source"] = sample_frame(
+            df_num.frame, cfg.scatter.sample_size, cfg.scatter.sample_rate
         )
 
         data["interaction.other_plots"] = {}
@@ -411,7 +386,7 @@ def basic_computations(
                     if (cat_col == other_col) or (cat_col + "_" + other_col in other_plots):
                         continue
                     # print(f"cat col:{cat_col}, other col:{other_col}")
-                    imdt = compute(df._ddf, cat_col, other_col, cfg=curr_cfg)
+                    imdt = compute(df.frame, cat_col, other_col, cfg=curr_cfg)
                     box_plot = render(imdt, curr_cfg)["layout"][0]
                     other_plots[cat_col + "_" + other_col] = box_plot
                     other_plots[other_col + "_" + cat_col] = box_plot
@@ -424,13 +399,10 @@ def basic_computations(
     # missing values
     completions = None
     if cfg.missingvalues.enable:
-        (
-            delayed,
-            completion,
-        ) = compute_missing_nullivariate(  # pylint: disable=unexpected-keyword-arg
+        gathered, completion = compute_missing_nullivariate(  # type: ignore[misc]
             df, cfg, _staged=True
         )
-        data["miss"] = delayed
+        data["miss"] = gathered
         completions = {"miss": completion}
 
     return data, completions

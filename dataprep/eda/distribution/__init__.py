@@ -4,13 +4,12 @@ This module implements the plot(df) function.
 
 from typing import Any, Dict, List, Optional, Union
 
-import dask.dataframe as dd
-import pandas as pd
-
 from ..configs import Config
 from ..container import Container
-from ..dtypes_v2 import DTypeDef, LatLong
-from ...progress_bar import ProgressBar
+from ..dtypes import DTypeDef, LatLong
+from ..eda_frame import DataFrame, sample_rows
+from ..parallel import Progress
+from ..target import compute_target, render_target
 from .compute import compute
 from .render import render
 
@@ -18,7 +17,7 @@ __all__ = ["plot", "compute", "render"]
 
 
 def plot(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: DataFrame,
     col1: Optional[Union[str, LatLong]] = None,
     col2: Optional[Union[str, LatLong]] = None,
     col3: Optional[str] = None,
@@ -26,6 +25,8 @@ def plot(
     config: Optional[Dict[str, Any]] = None,
     display: Optional[List[str]] = None,
     dtype: Optional[DTypeDef] = None,
+    target: Optional[str] = None,
+    sample: Union[int, float, None] = None,
     progress: bool = True,
 ) -> Container:
     """Generates plots for exploratory data analysis.
@@ -83,23 +84,52 @@ def plot(
         E.g.  dtype = {"a": Continuous, "b": "Nominal"} or
         dtype = {"a": Continuous(), "b": "nominal"}
         or dtype = Continuous() or dtype = "Continuous" or dtype = Continuous().
+    target
+        The name of a target column. ``plot(df, target="y")`` ranks every other
+        column by how strongly it is associated with the target and shows the
+        distribution of the target (see :func:`dataprep.eda.rank_features`).
+        ``plot(df, "x", target="y")`` is the same as ``plot(df, "x", "y")``.
+    sample
+        Plot a random sample of the rows instead of all of them: a number of rows
+        (int) or a fraction of the rows (float). The sample is the same on every
+        run, and the output says that it shows a sample.
     progress
         Enable the progress bar.
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> from dataprep.eda import *
-    >>> iris = pd.read_csv('https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv')
-    >>> plot(iris)
-    >>> plot(iris, "petal_length")
-    >>> plot(iris, "petal_width", "species")
+    >>> from dataprep.datasets import load_dataset
+    >>> from dataprep.eda import plot
+    >>> titanic = load_dataset("titanic")
+    >>> plot(titanic)  # doctest: +SKIP
+    >>> plot(titanic, "Age")  # doctest: +SKIP
+    >>> plot(titanic, "Age", "Sex")  # doctest: +SKIP
+    >>> plot(titanic, target="Survived")  # doctest: +SKIP
+    >>> plot(titanic, sample=500)  # doctest: +SKIP
     """
     cfg = Config.from_dict(display, config)
+    df, sample_note = sample_rows(df, sample)
 
-    with ProgressBar(minimum=1, disable=not progress):
+    if target is not None:
+        columns = [col for col in (col1, col2, col3) if col is not None]
+        if len(columns) > 1:
+            raise ValueError(
+                "With target=..., pass at most one other column: plot(df, target=...) "
+                "ranks every column, plot(df, col, target=...) compares one column with it."
+            )
+        if columns:
+            col1, col2, col3 = columns[0], target, None
+        else:
+            with Progress(enabled=progress):
+                itmdt = compute_target(df, target, cfg, dtype)
+            to_render = render_target(itmdt, cfg)
+            to_render["sample_note"] = sample_note
+            return Container(to_render, itmdt.visual_type, cfg)
+
+    with Progress(enabled=progress):
         itmdt = compute(df, col1, col2, col3, cfg=cfg, dtype=dtype)
 
     to_render = render(itmdt, cfg)
+    to_render["sample_note"] = sample_note
 
     return Container(to_render, itmdt.visual_type, cfg)

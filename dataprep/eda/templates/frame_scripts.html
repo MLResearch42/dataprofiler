@@ -1,0 +1,75 @@
+<script>
+    /* Runs when the document is shown inside a notebook <iframe>. */
+    (function () {
+        if (window.parent === window) { return; }
+
+        /* 1. Keep the frame as tall as the content (skipped for fixed-height frames). */
+        var autoHeight = {{ 'true' if auto_height|default(true) else 'false' }};
+        var last = 0;
+        function report() {
+            var body = document.body;
+            if (!body || !autoHeight) { return; }
+            var height = Math.ceil(body.getBoundingClientRect().height) + 24;
+            if (Math.abs(height - last) < 2) { return; }
+            last = height;
+            try {
+                if (window.frameElement) { window.frameElement.style.height = height + 'px'; }
+            } catch (err) { /* cross-origin parent: fall through to postMessage */ }
+            try { window.parent.postMessage({ dataprepHeight: height }, '*'); } catch (err) { }
+        }
+        window.addEventListener('load', function () {
+            report();
+            if (window.ResizeObserver) { new ResizeObserver(report).observe(document.body); }
+            /* bokeh draws asynchronously: check a few more times */
+            [100, 400, 1000, 2500].forEach(function (ms) { setTimeout(report, ms); });
+        });
+        document.addEventListener('click', function () { setTimeout(report, 60); });
+        document.addEventListener('change', function () { setTimeout(report, 60); });
+
+        /* 2. Hand mouse-wheel scrolling on to the notebook.
+           A frame swallows wheel events, and the VS Code notebook editor scrolls from
+           wheel events it sees in its own page, so without this the notebook cannot be
+           scrolled while the pointer is over a plot. Scrolling that the frame itself
+           can use (a long report, a scrollable table) is left alone. */
+        function canScroll(node, dx, dy) {
+            var root = document.scrollingElement || document.documentElement;
+            while (node && node.nodeType === 1) {
+                var style = window.getComputedStyle(node);
+                var isRoot = node === root || node === document.body;
+                var overflowY = style.overflowY, overflowX = style.overflowX;
+                var scrollsY = isRoot || overflowY === 'auto' || overflowY === 'scroll';
+                var scrollsX = isRoot || overflowX === 'auto' || overflowX === 'scroll';
+                var box = isRoot ? root : node;
+                if (dy !== 0 && scrollsY && box.scrollHeight > box.clientHeight + 1) {
+                    if (dy > 0 && box.scrollTop + box.clientHeight < box.scrollHeight - 1) { return true; }
+                    if (dy < 0 && box.scrollTop > 0) { return true; }
+                }
+                if (dx !== 0 && scrollsX && box.scrollWidth > box.clientWidth + 1) {
+                    if (dx > 0 && box.scrollLeft + box.clientWidth < box.scrollWidth - 1) { return true; }
+                    if (dx < 0 && box.scrollLeft > 0) { return true; }
+                }
+                if (isRoot) { break; }
+                node = node.parentNode;
+            }
+            return false;
+        }
+        document.addEventListener('wheel', function (ev) {
+            if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey) { return; }
+            if (canScroll(ev.target, ev.deltaX, ev.deltaY)) { return; }
+            try {
+                var frame = window.frameElement;
+                if (!frame) { return; }
+                var box = frame.getBoundingClientRect();
+                frame.dispatchEvent(new window.parent.WheelEvent('wheel', {
+                    deltaX: ev.deltaX, deltaY: ev.deltaY, deltaZ: ev.deltaZ, deltaMode: ev.deltaMode,
+                    /* legacy fields, which VS Code reads first; copy them so that the
+                       direction and speed match a real wheel event exactly */
+                    wheelDeltaX: ev.wheelDeltaX, wheelDeltaY: ev.wheelDeltaY,
+                    clientX: box.left + ev.clientX, clientY: box.top + ev.clientY,
+                    shiftKey: ev.shiftKey, altKey: ev.altKey,
+                    bubbles: true, cancelable: true, view: window.parent
+                }));
+            } catch (err) { /* cross-origin parent: nothing to forward to */ }
+        }, { passive: true });
+    })();
+</script>

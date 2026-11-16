@@ -4,78 +4,64 @@
 Installation
 ============
 
-.. toctree::
-    :maxdepth: 2
-    :hidden:
-
-To install DataPrep via pip from `PyPi <https://pypi.org/project/dataprep/>`_, run
+DataPrep needs Python 3.10 or newer. Install it from PyPI:
 
 ::
 
-    pip install dataprep
+    pip install dataprep-next
 
+and import it as ``dataprep``:
 
-To install DataPrep with Anaconda or Miniconda from the 
-`Anaconda <https://docs.continuum.io/anaconda/>`_ distribution, run
+.. code-block:: python
 
-::
+    from dataprep.eda import plot, create_report
+    from dataprep.clean import clean_email
 
-    conda install -c conda-forge dataprep 
+Optional extras
+===============
 
-Supported Platforms
-===================
+The core install covers ``plot``, ``plot_correlation``, ``plot_missing``,
+``plot_diff``, ``create_report``, ``create_diff_report`` and every ``clean_*``
+function except ``clean_duplication()`` on pandas DataFrames. Extras add the rest:
 
-We currently support the following platforms:
+* ``pip install "dataprep-next[dask]"``: accept Dask DataFrames as input
+* ``pip install "dataprep-next[gui]"``: ``clean_df_gui()``, the point-and-click cleaning app
+* ``pip install "dataprep-next[nlp]"``: stemming and lemmatizing (NLTK)
+* ``pip install "dataprep-next[duplication]"``: the interactive ``clean_duplication()`` tool
+* ``pip install "dataprep-next[notebook]"``: widget progress bars in notebooks
+* ``pip install "dataprep-next[all]"``: everything above
 
-* Jupyter Notebook
-* Google Colab
-* Kaggle Notebooks
-* VSCode Python Notebook
-* Standalone Python
+Lemmatizing additionally needs NLTK's ``wordnet`` corpus, which NLTK downloads
+separately. Stemming needs no extra data.
 
-Deploy Dataprep.EDA on Hadoop Yarn
-===================================
+Installing on a machine without internet access
+===============================================
 
-We could deploy dataprep.eda on Yarn Cluster via `Dask-Yarn <https://yarn.dask.org/en/latest/>`_
-
-
-Install dask-yarn via pip, run
-
-::
-
-    pip install dask-yarn
-
-Package conda environment via `conda-pack <https://conda.github.io/conda-pack/>`_
-
-::
-
-    conda-pack
-
-Upload the archive to HDFS
+DataPrep never contacts the internet at import time or while plotting. If your
+machine can only reach an internal PyPI mirror, ``pip install dataprep-next``
+works as long as the mirror carries its dependencies. To install from files
+instead, collect the wheels on a connected machine with the same operating
+system and Python version. ``pip wheel`` (rather than ``pip download``) also
+builds a wheel for any dependency that is only published as source code:
 
 ::
 
-    hadoop fs -put my_env.tar.gz /
+    pip wheel "dataprep-next[all]" -w wheels/
 
-Start a Yarn cluster and do some dataprep.eda work
+copy the ``wheels`` folder across, and install from it:
 
 ::
 
-    from dask_yarn import YarnCluster
-    from dask.distributed import Client
-    from dataprep.eda import create_report
-    import pandas as pd
+    pip install --no-index --find-links wheels/ "dataprep-next[all]"
 
-    # Create a cluster where each worker has two cores and 10GiB of memory
-    cluster = YarnCluster(environment='hdfs://nameservice/my_env.tar.gz', n_workers=4, worker_cores=2, worker_memory='10GiB')
+The only features that use the network are ``clean_currency(..., target_currency=...)``,
+which fetches exchange rates, and ``set_bokeh_resources("cdn")``, which you
+have to opt into.
 
-    # Connect to the cluster
-    client = Client(cluster)
+Supported environments
+======================
 
-    # Do some dataprep.eda work here
-    df = pd.read_csv('data.csv')
-    create_report(df)
-
-    # Close the resources
-    client.close()
-    cluster.shutdown()
+* Jupyter Notebook and JupyterLab
+* The VS Code notebook editor and interactive window
+* Google Colab and Kaggle notebooks
+* Plain Python scripts: use ``.save("file.html")`` or ``.show_browser()``

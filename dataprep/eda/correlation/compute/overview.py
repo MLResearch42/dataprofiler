@@ -2,11 +2,8 @@
 
 Currently this boils down to pandas' implementation."""
 
-from functools import partial
 from typing import Any, Dict, List, Optional, Tuple
 
-import dask
-import dask.array as da
 import numpy as np
 import pandas as pd
 
@@ -32,13 +29,13 @@ def _calc_overview(
         raise ValueError("value_range and k cannot be present in both")
 
     num_df = df.select_num_columns()
+    if len(num_df.columns) < 2:
+        raise ValueError(
+            "plot_correlation needs at least two numerical columns, "
+            f"but the data has {len(num_df.columns)}."
+        )
 
     cordx, cordy, corrs = correlation_nxn(num_df, cfg)
-
-    # The computations below is not expensive (scales with # of columns)
-    # So we do them in pandas
-
-    (corrs,) = dask.compute(corrs)
 
     if cfg.stats.enable or cfg.insight.enable:
         if cfg.stats.enable or cfg.pearson.enable:
@@ -152,7 +149,7 @@ def _calc_overview(
 
 def correlation_nxn(
     df: EDAFrame, cfg: Config
-) -> Tuple[np.ndarray, np.ndarray, Dict[CorrelationMethod, da.Array]]:
+) -> Tuple[np.ndarray, np.ndarray, Dict[CorrelationMethod, np.ndarray]]:
     """
     Calculation of a n x n correlation matrix for n columns
 
@@ -165,7 +162,7 @@ def correlation_nxn(
     cordx, cordy = np.meshgrid(range(ncols), range(ncols))
     cordx, cordy = cordy.ravel(), cordx.ravel()
 
-    corrs: Dict[CorrelationMethod, da.Array] = {}
+    corrs: Dict[CorrelationMethod, np.ndarray] = {}
 
     if cfg.pearson.enable or cfg.stats.enable:
         corrs[CorrelationMethod.Pearson] = _pearson_nxn(df)
@@ -177,89 +174,86 @@ def correlation_nxn(
     return cordx, cordy, corrs
 
 
-def _pearson_nxn(df: EDAFrame) -> da.Array:
+# Kendall's tau costs O(n log n) per column pair and has no vectorised form, so
+# on long tables it is estimated from a random sample of this many rows.
+KENDALL_MAX_ROWS = 20_000
+
+
+def _corr(df: EDAFrame, method: str) -> np.ndarray:
+    if len(df.columns) == 0:
+        return np.empty((0, 0))
+    frame = df.frame
+    if method == "kendall" and frame.shape[0] > KENDALL_MAX_ROWS:
+        frame = frame.sample(n=KENDALL_MAX_ROWS, random_state=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # .copy(): the callers overwrite the diagonal in place
+        return frame.corr(method=method).to_numpy(dtype=float).copy()
+
+
+def _pearson_nxn(df: EDAFrame) -> np.ndarray:
     """Calculate column-wise pearson correlation."""
-    return (
-        df.frame.repartition(npartitions=1)
-        .map_partitions(partial(pd.DataFrame.corr, method="pearson"))
-        .to_dask_array()
-    )
+    return _corr(df, "pearson")
 
 
-def _spearman_nxn(df: EDAFrame) -> da.Array:
+def _spearman_nxn(df: EDAFrame) -> np.ndarray:
     """Calculate column-wise spearman correlation."""
-    return (
-        df.frame.repartition(npartitions=1)
-        .map_partitions(partial(pd.DataFrame.corr, method="spearman"))
-        .to_dask_array()
-    )
+    return _corr(df, "spearman")
 
 
-def _kendall_tau_nxn(df: EDAFrame) -> da.Array:
+def _kendall_tau_nxn(df: EDAFrame) -> np.ndarray:
     """Calculate column-wise kendalltau correlation."""
-    return (
-        df.frame.repartition(npartitions=1)
-        .map_partitions(partial(pd.DataFrame.corr, method="kendall"))
-        .to_dask_array()
-    )
+    return _corr(df, "kendall")
+
+
+def _upper_pairs(corrs: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Row indices, column indices and values of the pairs above the diagonal."""
+    rows, cols = np.triu_indices(corrs.shape[0], k=1)
+    return rows, cols, corrs[rows, cols]
 
 
 def most_corr(corrs: np.ndarray) -> Tuple[float, float, float, List[Any], List[Any]]:
-    """Find the most correlated columns."""
-    positive_col_set = set()
-    negative_col_set = set()
-    corrs_copy = corrs
-    for i in range(corrs_copy.shape[0]):
-        corrs_copy[i, i] = 0
-    mean = corrs_copy.mean()
-    p_maximum = corrs_copy.max()
-    n_maximum = (-corrs_copy).max()
+    """Find the most correlated columns.
 
-    if p_maximum != 0:
-        p_col1, p_col2 = np.where(corrs_copy == p_maximum)
-    else:
-        p_col1, p_col2 = [], []
-    if n_maximum != 0:
-        n_col1, n_col2 = np.where(corrs_copy == -n_maximum)
-    else:
-        n_col1, n_col2 = [], []
+    Returns the highest positive correlation, the highest negative correlation,
+    the mean correlation over all column pairs, and the column index pairs that
+    reach the positive and the negative extreme. Undefined (NaN) correlations
+    are ignored. The input matrix is not modified.
+    """
+    rows, cols, vals = _upper_pairs(corrs)
+    valid = np.isfinite(vals)
+    if not valid.any():
+        return 0.0, 0.0, float("nan"), [], []
 
-    for i, _ in enumerate(p_col1):
-        if p_col1[i] < p_col2[i]:
-            positive_col_set.add((p_col1[i], p_col2[i]))
-        elif p_col1[i] > p_col2[i]:
-            positive_col_set.add((p_col2[i], p_col1[i]))
-    for i, _ in enumerate(n_col1):
-        if n_col1[i] < n_col2[i]:
-            negative_col_set.add((n_col1[i], n_col2[i]))
-        elif n_col1[i] > n_col2[i]:
-            negative_col_set.add((n_col2[i], n_col1[i]))
+    p_maximum = max(float(vals[valid].max()), 0.0)
+    n_maximum = min(float(vals[valid].min()), 0.0)
+    mean = float(vals[valid].mean())
+
+    positive = [(int(i), int(j)) for i, j in zip(rows[vals == p_maximum], cols[vals == p_maximum])]
+    negative = [(int(i), int(j)) for i, j in zip(rows[vals == n_maximum], cols[vals == n_maximum])]
 
     return (
         round(p_maximum, 3),
-        round(-n_maximum, 3),
+        round(n_maximum, 3),
         round(mean, 3),
-        list(positive_col_set),
-        list(negative_col_set),
+        positive if p_maximum != 0 else [],
+        negative if n_maximum != 0 else [],
     )
 
 
 def least_corr(corrs: np.ndarray) -> Tuple[float, List[Any]]:
-    """Find the least correlated columns."""
-    col_set = set()
-    corrs_copy = corrs
-    for i in range(corrs_copy.shape[0]):
-        corrs_copy[i, i] = 2
-    minimum = abs(corrs_copy).min()
-    col1, col2 = np.where(abs(corrs_copy) == minimum)
+    """Find the least correlated columns: the pairs whose correlation is closest to 0.
 
-    for i, _ in enumerate(col1):
-        if col1[i] < col2[i]:
-            col_set.add((col1[i], col2[i]))
-        elif col1[i] > col2[i]:
-            col_set.add((col2[i], col1[i]))
+    Undefined (NaN) correlations are ignored. The input matrix is not modified.
+    """
+    rows, cols, vals = _upper_pairs(corrs)
+    valid = np.isfinite(vals)
+    if not valid.any():
+        return float("nan"), []
 
-    return round(minimum, 3), list(col_set)
+    absvals = np.abs(vals)
+    minimum = float(absvals[valid].min())
+    sel = absvals == minimum
+    return round(minimum, 3), [(int(i), int(j)) for i, j in zip(rows[sel], cols[sel])]
 
 
 def create_string(flag: str, source: List[Any], most_show: int, df: EDAFrame) -> str:

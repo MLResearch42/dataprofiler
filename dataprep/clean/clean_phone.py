@@ -2,17 +2,19 @@
 Clean and validate a DataFrame column containing phone numbers.
 """
 
-import re
-from operator import itemgetter
-from typing import Any, Union
+from __future__ import annotations
 
-import dask
-import dask.dataframe as dd
+import re
+from functools import partial
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
-from .utils import NULL_VALUES, create_report_new, to_dask
+from .utils import check_errors, clean_column, create_report_new, is_null, validate_values
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 PHONE_PATTERN = re.compile(
     r"""
@@ -81,7 +83,7 @@ ALPHA_NUM_MAP = {
 
 
 def clean_phone(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     output_format: str = "nanp",
     fix_missing: str = "empty",
@@ -163,47 +165,30 @@ def clean_phone(
 
     if fix_missing not in {"auto", "empty"}:
         raise ValueError(
-            f'output_format {output_format} is invalid, it needs to be "auto" or "empty"'
+            f'fix_missing {fix_missing} is invalid, it needs to be "auto" or "empty"'
         )
 
-    # convert to dask
-    df = to_dask(df)
+    check_errors(errors)
 
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [_format_phone(x, output_format, fix_missing, split, errors) for x in srs],
-        meta=object,
+    new_columns = (
+        ["country_code", "area_code", "office_code", "station_code", "ext_num"]
+        if split
+        else [f"{column}_clean"]
     )
-    if split:
-        # For some reason the meta data for the last 3 components needs to be
-        # set. I think this is a dask bug
-        df = df.assign(
-            country_code=df["clean_code_tup"].map(itemgetter(0)),
-            area_code=df["clean_code_tup"].map(itemgetter(1)),
-            office_code=df["clean_code_tup"].map(itemgetter(2)),
-            station_code=df["clean_code_tup"].map(itemgetter(3), meta=("station_code", object)),
-            ext_num=df["clean_code_tup"].map(itemgetter(4), meta=("ext_num", object)),
-            _code_=df["clean_code_tup"].map(itemgetter(5), meta=("_code_", object)),
-        )
-    else:
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-        )
-        df = df.rename(columns={"_temp_": f"{column}_clean"})
-
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
+    df, stats = clean_column(
+        df,
+        column,
+        partial(
+            _format_phone,
+            output_format=output_format,
+            fix_missing=fix_missing,
+            split=split,
+            errors=errors,
+        ),
+        new_columns,
+        inplace=inplace,
+        progress=progress,
+    )
 
     # output a report describing the result of clean_phone
     if report:
@@ -212,7 +197,7 @@ def clean_phone(
     return df
 
 
-def validate_phone(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
+def validate_phone(x: str | pd.Series) -> bool | pd.Series:
     """
     Validate phone numbers.
 
@@ -235,9 +220,7 @@ def validate_phone(x: Union[str, pd.Series]) -> Union[bool, pd.Series]:
     Name: phone, dtype: bool
     """
 
-    if isinstance(x, pd.Series):
-        return x.apply(_check_phone, clean=False)
-    return _check_phone(x, False)
+    return validate_values(x, partial(_check_phone, clean=False))
 
 
 def _format_phone(
@@ -275,11 +258,10 @@ def _format_phone(
         ext_num = f" ext. {ext_num}" if ext_num else ""
         result = f"{area_code}{office_code}-{station_code}{ext_num}"
     elif output_format == "e164":  # +NPANXXXXXX
-        print(country_code)
-        if country_code is None and area_code:
-            country_code = "+1"
+        if area_code:
+            country_code = "+" + (country_code or "1")
         else:
-            country_code = "+" + country_code if area_code else ""
+            country_code = ""
         area_code = area_code if area_code else ""
         ext_num = f" ext. {ext_num}" if ext_num else ""
         result = f"{country_code}{area_code}{office_code}{station_code}{ext_num}"
@@ -291,7 +273,7 @@ def _format_phone(
     return result, 2 if phone != result else 3
 
 
-def split_phone(mch, clean) -> Any:
+def split_phone(mch: re.Match[str], clean: bool) -> Any:
     """
     Function to parse a phone number and return the components if the
     parse is successful.
@@ -345,14 +327,15 @@ def _check_phone(phone: Any, clean: bool) -> Any:
     """
     # If the value is null, return None for the components
     # and "null" for the "status"
-    if phone in NULL_VALUES:
+    if is_null(phone):
         return (None,) * 5 + ("null",) if clean else False
 
-    mch = re.match(US_PHONE_PATTERN, re.sub(r"''", r'"', str(phone)))
+    text = str(phone).replace("''", '"')
+    mch = US_PHONE_PATTERN.match(text)
     # Check if the value was able to be parsed
 
     if not mch:
-        mch = re.match(PHONE_PATTERN, re.sub(r"''", r'"', str(phone)))
+        mch = PHONE_PATTERN.match(text)
         if not mch:
             return (None,) * 5 + ("unknown",) if clean else False
         else:

@@ -1,35 +1,42 @@
 """Computations for plot(df)"""
 
-from itertools import combinations
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple, Union, DefaultDict
+from itertools import combinations
+from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 
-import dask
-import dask.array as da
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-from dask.array.stats import chisquare
 
 from ...configs import Config
-from ...dtypes_v2 import (
+from ...dtypes import (
     Continuous,
     DateTime,
-    SmallCardNum,
-    GeoPoint,
     DType,
     DTypeDef,
-    Nominal,
     GeoGraphy,
+    GeoPoint,
+    Nominal,
+    SmallCardNum,
 )
-from ...eda_frame import EDAFrame
-from ...utils import _calc_line_dt, ks_2samp, normaltest, skewtest
+from ...eda_frame import DataFrame, EDAFrame
 from ...intermediate import Intermediate
+from ...parallel import pmap
+from ...utils import (
+    _calc_line_dt,
+    chisquare,
+    finite,
+    histogram,
+    ks_2samp,
+    normaltest,
+    skewtest,
+)
+
+# Columns compared pairwise for the "similar distribution" insight. The number of
+# pairs grows quadratically, so wide tables are capped.
+MAX_KS_COLUMNS = 40
 
 
-def compute_overview(
-    df: Union[pd.DataFrame, dd.DataFrame], cfg: Config, dtype: Optional[DTypeDef]
-) -> Intermediate:
+def compute_overview(df: DataFrame, cfg: Config, dtype: Optional[DTypeDef]) -> Intermediate:
     """
     Compute functions for plot(df)
 
@@ -49,28 +56,23 @@ def compute_overview(
     # pylint: disable=too-many-locals
 
     frame = EDAFrame(df, dtype=dtype)
+    if frame.shape[0] == 0 or frame.shape[1] == 0:
+        raise ValueError("The DataFrame is empty, there is nothing to plot.")
 
-    data: List[Tuple[str, DType, Any]] = []
-    for col in frame.columns:
+    def _column(col: str) -> Optional[Tuple[str, DType, Any]]:
         col_dtype = frame.get_eda_dtype(col)
         if isinstance(col_dtype, Continuous) and (cfg.hist.enable or cfg.insight.enable):
-            data.append((col, col_dtype, _cont_calcs(frame.frame[col].dropna(), cfg)))
-        elif isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum)) and (
+            return col, col_dtype, _cont_calcs(frame.frame[col].dropna(), cfg)
+        if isinstance(col_dtype, (Nominal, GeoGraphy, GeoPoint, SmallCardNum)) and (
             cfg.bar.enable or cfg.insight.enable
         ):
-            srs = frame.get_col_as_str(col).dropna()
-            # when srs is full NA, the column type will be float
-            # and need to be transformed into str.
-            if frame.get_missing_cnt(col) == frame.shape[0]:
-                srs = srs.astype(str)
-            data.append((col, col_dtype, _nom_calcs(srs, cfg)))
-        elif isinstance(col_dtype, DateTime) and (cfg.line.enable or cfg.insight.enable):
-            data.append(
-                (col, col_dtype, dask.delayed(_calc_line_dt)(frame.frame[[col]], cfg.line.unit))
-            )
+            return col, col_dtype, _nom_calcs(frame.get_col_as_str(col).dropna(), cfg)
+        if isinstance(col_dtype, DateTime) and (cfg.line.enable or cfg.insight.enable):
+            return col, col_dtype, _calc_line_dt(frame.frame[[col]], cfg.line.unit)
+        return None
 
+    data = [res for res in pmap(_column, list(frame.columns), desc="Columns") if res is not None]
     ov_stats = calc_stats(frame, cfg)  # overview statistics
-    data, ov_stats = dask.compute(data, ov_stats)
 
     # extract the plotting data, and detect and format the insights
     plot_data: List[Tuple[str, DType, Any]] = []
@@ -105,9 +107,9 @@ def compute_overview(
     )
 
 
-def _cont_calcs(srs: dd.Series, cfg: Config) -> Dict[str, Any]:
+def _cont_calcs(srs: pd.Series, cfg: Config) -> Dict[str, Any]:
     """
-    Computations for a continuous column in plot(df)
+    Computations for a continuous column in plot(df). Assumes nulls were dropped.
     """
     # dictionary of data for the histogram and related insights
     data: Dict[str, Any] = {}
@@ -116,31 +118,35 @@ def _cont_calcs(srs: dd.Series, cfg: Config) -> Dict[str, Any]:
         data["npres"] = srs.shape[0]  # number of present (not null) values
 
     # drop infinite values
-    srs = srs[~srs.isin({np.inf, -np.inf})]
+    srs = finite(srs)
+    arr = srs.to_numpy()
 
     # histogram
-    data["hist"] = da.histogram(srs, bins=cfg.hist.bins, range=(srs.min(), srs.max()))
+    data["hist"] = histogram(arr, bins=cfg.hist.bins)
 
     if cfg.insight.enable:
         data["chisq"] = chisquare(data["hist"][0])
         data["norm"] = normaltest(data["hist"][0])
         data["skew"] = skewtest(data["hist"][0])
-        data["nneg"] = (srs < 0).sum()  # number of negative values
-        data["nuniq"] = srs.nunique_approx()  # number of unique values
-        data["nzero"] = (srs == 0).sum()  # number of zeros
+        data["nneg"] = int((arr < 0).sum())  # number of negative values
+        data["nuniq"] = int(srs.nunique())  # number of unique values
+        data["nzero"] = int((arr == 0).sum())  # number of zeros
         data["nreals"] = srs.shape[0]  # number of non-inf values
     return data
 
 
-def _nom_calcs(srs: dd.Series, cfg: Config) -> Dict[str, Any]:
+def _nom_calcs(srs: pd.Series, cfg: Config) -> Dict[str, Any]:
     """
-    Computations for a nominal column in plot(df). Assume srs is string column.
+    Computations for a nominal column in plot(df). Assume srs is a string column
+    without nulls.
     """
     # dictionary of data for the bar chart and related insights
     data: Dict[str, Any] = {}
 
     # value counts for barchart and uniformity insight
     grps = srs.value_counts(sort=False)
+    grps.name = srs.name
+    grps.index.name = None
 
     if cfg.bar.enable:
         # select the largest or smallest groups
@@ -150,11 +156,15 @@ def _nom_calcs(srs: dd.Series, cfg: Config) -> Dict[str, Any]:
         data["nuniq"] = grps.shape[0]
 
     if cfg.insight.enable:
-        data["chisq"] = chisquare(grps.values)  # chi-squared test for uniformity
+        data["chisq"] = chisquare(grps.to_numpy())  # chi-squared test for uniformity
         data["nuniq"] = grps.shape[0]  # number of unique values
-        data["npres"] = grps.sum()  # number of present (not null) values
-        data["min_len"] = srs.str.len().min()
-        data["max_len"] = srs.str.len().max()
+        data["npres"] = int(grps.sum())  # number of present (not null) values
+        # string lengths, computed on the distinct values only
+        if len(grps):
+            lens = pd.Series(grps.index).map(str).str.len()
+            data["min_len"], data["max_len"] = lens.min(), lens.max()
+        else:
+            data["min_len"], data["max_len"] = np.nan, np.nan
 
     return data
 
@@ -195,25 +205,40 @@ def calc_stats(frame: EDAFrame, cfg: Config) -> Dict[str, Any]:
     if cfg.stats.enable or cfg.insight.enable:
         dtype_cnts, num_cols = _get_dtype_cnts_and_num_cols(frame)
 
-    df: dd.DataFrame = frame.frame
+    df: pd.DataFrame = frame.frame
+    if cfg.stats.enable or cfg.insight.enable:
+        stats["nrows_wo_dups"] = _count_unique_rows(df)
+
     if cfg.stats.enable:
         stats["ncols"] = df.shape[1]
-        stats["npresent_cells"] = df.count().sum()
-        stats["nrows_wo_dups"] = df.drop_duplicates().shape[0]
-        stats["mem_use"] = df.memory_usage(deep=True).sum()
+        stats["npresent_cells"] = int(
+            df.shape[0] * df.shape[1] - sum(frame.get_missing_cnt(col) for col in frame.columns)
+        )
+        stats["mem_use"] = int(df.memory_usage(deep=True).sum())
         stats["dtype_cnts"] = dtype_cnts
-
-    if not cfg.stats.enable and cfg.insight.enable:
-        stats["nrows_wo_dups"] = df.drop_duplicates().shape[0]
 
     if cfg.insight.enable:
         # compute distribution similarity on a data sample
-        df_smp = df.map_partitions(lambda x: x.sample(min(1000, x.shape[0])), meta=df)
         stats["ks_tests"] = []
-        for col1, col2 in combinations(num_cols, 2):
-            stats["ks_tests"].append((col1, col2, ks_2samp(df_smp[col1], df_smp[col2])[1]))
+        ks_cols = num_cols[:MAX_KS_COLUMNS]
+        if len(ks_cols) > 1:
+            df_smp = df[ks_cols].sample(n=min(1000, df.shape[0]), random_state=0)
+            arrs = {col: df_smp[col].to_numpy(dtype=float) for col in ks_cols}
+            for col1, col2 in combinations(ks_cols, 2):
+                stats["ks_tests"].append((col1, col2, ks_2samp(arrs[col1], arrs[col2])[1]))
 
     return stats
+
+
+def _count_unique_rows(df: pd.DataFrame) -> int:
+    """Number of rows left after dropping exact duplicate rows."""
+    if df.shape[0] == 0 or df.shape[1] == 0:
+        return df.shape[0]
+    try:
+        return int(df.shape[0] - df.duplicated().sum())
+    except TypeError:
+        # unhashable cells (lists, dicts): compare their string form instead
+        return int(df.shape[0] - df.astype(str).duplicated().sum())
 
 
 def _format_ov_ins(data: Dict[str, Any], cfg: Config) -> List[Dict[str, str]]:
@@ -224,7 +249,7 @@ def _format_ov_ins(data: Dict[str, Any], cfg: Config) -> List[Dict[str, str]]:
     # list of insights
     ins: List[Dict[str, str]] = []
 
-    pdup = round((1 - data["nrows_wo_dups"] / data["nrows"]) * 100, 2)
+    pdup = round((1 - data["nrows_wo_dups"] / data["nrows"]) * 100, 2) if data["nrows"] else 0.0
     if pdup > cfg.insight.duplicates__threshold:
         ndup = data["nrows"] - data["nrows_wo_dups"]
         ins.append({"Duplicates": f"Dataset has {ndup} ({pdup}%) duplicate rows"})
@@ -309,7 +334,7 @@ def _format_nom_ins(col: str, data: Dict[str, Any], nrows: int, cfg: Config) -> 
         length = data["min_len"]
         ins.append({"Constant Length": f"/*start*/{col}/*end*/ has constant length {length}"})
 
-    if data["nuniq"] == data["npres"]:
+    if data["npres"] and data["nuniq"] == data["npres"]:
         ins.append({"Unique": f"/*start*/{col}/*end*/ has all distinct values"})
 
     # list of insight messages
@@ -341,7 +366,7 @@ def _insight_pagination(ins: List[Dict[str, str]]) -> Dict[int, List[Dict[str, s
     ins.sort(key=lambda x: ins_order.index(list(x.keys())[0]))
     # paginate the sorted insights
     page_count = int(np.ceil(len(ins) / 10))
-    paginated_ins: Dict[int, List[Dict[str, str]]] = dict()
+    paginated_ins: Dict[int, List[Dict[str, str]]] = {}
     for i in range(1, page_count + 1):
         paginated_ins[i] = ins[(i - 1) * 10 : i * 10]
 

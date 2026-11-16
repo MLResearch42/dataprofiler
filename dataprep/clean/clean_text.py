@@ -2,18 +2,23 @@
 Clean a DataFrame column containing text data.
 """
 
+from __future__ import annotations
+
 import re
 import string
 from functools import partial, update_wrapper
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from itertools import chain
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union
 from unicodedata import normalize
 
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
 from ..assets.english_stopwords import english_stopwords
-from .utils import NULL_VALUES, to_dask
+from .utils import add_columns, apply_partitions, is_missing, is_null
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 REGEX_BRACKETS = {
     "angle": re.compile(r"(\<)[^<>]*(\>)"),
@@ -30,7 +35,7 @@ REGEX_WHITESPACE = re.compile(r"[\n\t]|[ ]{2,}")
 
 
 def clean_text(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     pipeline: Optional[List[Dict[str, Any]]] = None,
     stopwords: Optional[Set[str]] = None,
@@ -68,16 +73,20 @@ def clean_text(
                                                  text
     0  show amazing fresh innovative idea first aired
     """
-    df = to_dask(df)
-
     pipe = _get_default_pipeline(stopwords) if not pipeline else _get_custom_pipeline(pipeline)
 
-    for func in pipe:
-        df[column] = df[column].apply(func, meta=object)
+    def _clean_partition(pdf: pd.DataFrame) -> tuple[pd.DataFrame, List[Any]]:
+        values = pdf[column].tolist()
+        for func in pipe:
+            values = [func(val) for val in values]
+        return pdf, values
 
-    df = df.compute()
+    parts = apply_partitions(df, _clean_partition)
+    pdf = parts[0][0] if len(parts) == 1 else pd.concat([part[0] for part in parts])
+    values = list(chain.from_iterable(part[1] for part in parts))
 
-    return df
+    # the cleaned text replaces the original column
+    return add_columns(pdf, {column: values})
 
 
 def default_text_pipeline() -> List[Dict[str, Any]]:
@@ -122,7 +131,7 @@ def _get_default_pipeline(
         _remove_urls,
         _remove_punctuation,
         _remove_accents,
-        lambda x: _remove_stopwords(x, stopwords),
+        partial(_remove_stopwords, stopwords=stopwords),
         _remove_whitespace,
     ]
 
@@ -185,35 +194,35 @@ def _fillna(text: Any, value: Any = np.nan) -> Any:
     """
     Replace all null values with NaN (default) or the supplied value.
     """
-    return value if text in NULL_VALUES else str(text)
+    return value if is_null(text) else str(text)
 
 
 def _lowercase(text: Any) -> Any:
     """
     Convert all characters to lowercase.
     """
-    return str(text).lower() if pd.notna(text) else text
+    return str(text).lower() if not is_missing(text) else text
 
 
 def _sentence_case(text: Any) -> Any:
     """
     Convert first character to uppercase and remaining to lowercase.
     """
-    return str(text).capitalize() if pd.notna(text) else text
+    return str(text).capitalize() if not is_missing(text) else text
 
 
 def _title_case(text: Any) -> Any:
     """
     Convert first character of each word to uppercase and remaining to lowercase.
     """
-    return str(text).title() if pd.notna(text) else text
+    return str(text).title() if not is_missing(text) else text
 
 
 def _uppercase(text: Any) -> Any:
     """
     Convert all characters to uppercase.
     """
-    return str(text).upper() if pd.notna(text) else text
+    return str(text).upper() if not is_missing(text) else text
 
 
 def _remove_accents(text: Any) -> Any:
@@ -222,7 +231,7 @@ def _remove_accents(text: Any) -> Any:
     """
     return (
         normalize("NFD", str(text)).encode("ascii", "ignore").decode("ascii")
-        if pd.notna(text)
+        if not is_missing(text)
         else text
     )
 
@@ -244,7 +253,7 @@ def _remove_bracketed(text: Any, brackets: Union[str, Set[str]], inclusive: bool
         If True (default), remove the brackets along with the text in between.
         Otherwise, keep the brackets.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     text = str(text)
@@ -262,21 +271,21 @@ def _remove_digits(text: Any) -> Any:
     """
     Remove all digits.
     """
-    return re.sub(REGEX_DIGITS, "", str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_DIGITS, "", str(text)) if not is_missing(text) else text
 
 
 def _remove_html(text: Any) -> Any:
     """
     Remove HTML tags.
     """
-    return re.sub(REGEX_HTML, "", str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_HTML, "", str(text)) if not is_missing(text) else text
 
 
 def _remove_prefixed(text: Any, prefix: Union[str, Set[str]]) -> Any:
     """
     Remove substrings that start with the prefix(es).
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     text = str(text)
@@ -293,7 +302,7 @@ def _remove_punctuation(text: Any) -> Any:
     """
     Remove punctuation marks.
     """
-    return re.sub(REGEX_PUNCTUATION, " ", str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_PUNCTUATION, " ", str(text)) if not is_missing(text) else text
 
 
 def _remove_stopwords(text: Any, stopwords: Optional[Set[str]] = None) -> Any:
@@ -301,7 +310,7 @@ def _remove_stopwords(text: Any, stopwords: Optional[Set[str]] = None) -> Any:
     Remove a set of words from the text.
     If `stopwords` is None (default), use NLTK's stopwords.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     stopwords = english_stopwords if not stopwords else stopwords
@@ -312,14 +321,14 @@ def _remove_urls(text: Any) -> Any:
     """
     Remove URLS.
     """
-    return re.sub(REGEX_URL, "", str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_URL, "", str(text)) if not is_missing(text) else text
 
 
 def _remove_whitespace(text: Any) -> Any:
     """
     Remove extra spaces along with tabs and newlines.
     """
-    return re.sub(REGEX_WHITESPACE, " ", str(text)).strip() if pd.notna(text) else text
+    return re.sub(REGEX_WHITESPACE, " ", str(text)).strip() if not is_missing(text) else text
 
 
 def _replace_bracketed(
@@ -344,7 +353,7 @@ def _replace_bracketed(
         If True (default), replace the brackets with the new text as well.
         Otherwise, keep the brackets.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     text = str(text)
@@ -363,7 +372,7 @@ def _replace_digits(text: Any, value: str, block: Optional[bool] = True) -> Any:
     Replace all digits with the value. If `block` is True (default),
     only replace blocks of digits.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     return (
@@ -377,7 +386,7 @@ def _replace_prefixed(text: Any, prefix: Union[str, Set[str]], value: str) -> An
     """
     Replace all substrings starting with the prefix(es) with the value.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     text = str(text)
@@ -394,7 +403,7 @@ def _replace_punctuation(text: Any, value: str) -> Any:
     """
     Replace all punctuation marks with the value.
     """
-    return re.sub(REGEX_PUNCTUATION, value, str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_PUNCTUATION, value, str(text)) if not is_missing(text) else text
 
 
 def _replace_stopwords(text: Any, value: str, stopwords: Optional[Set[str]] = None) -> Any:
@@ -402,7 +411,7 @@ def _replace_stopwords(text: Any, value: str, stopwords: Optional[Set[str]] = No
     Replace a set of words in the text with the value.
     If `stopwords` is None (default), use NLTK's stopwords.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     stopwords = english_stopwords if not stopwords else stopwords
@@ -414,7 +423,7 @@ def _replace_text(text: Any, value: Dict[str, str], block: Optional[bool] = True
     Replace a sequence of characters with another according to the value mapping.
     If `block` is True (default), only replace standalone blocks of the sequence.
     """
-    if pd.isna(text):
+    if is_missing(text):
         return text
 
     text = str(text)
@@ -432,7 +441,7 @@ def _replace_urls(text: Any, value: str) -> Any:
     """
     Replace all URLs with the value.
     """
-    return re.sub(REGEX_URL, value, str(text)) if pd.notna(text) else text
+    return re.sub(REGEX_URL, value, str(text)) if not is_missing(text) else text
 
 
 def _wrapped_partial(

@@ -3,21 +3,20 @@ Clean and validate a DataFrame column containing dates and times.
 """
 
 # pylint: disable=too-many-lines
+from __future__ import annotations
+
 import datetime
 from copy import deepcopy
 from datetime import timedelta
-from operator import itemgetter
-from typing import Any, List, Tuple, Union, Optional
+from functools import partial
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
-import dask
-import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-import pytz
-from pytz import all_timezones
 
-from ..progress_bar import ProgressBar
 from .clean_date_utils import (
+    ALL_TIMEZONES,
     AM,
     JUMP,
     MONTHS,
@@ -40,11 +39,21 @@ from .clean_date_utils import (
     fix_missing_minimum,
     split,
 )
-from .utils import create_report_new, to_dask
+from .utils import (
+    apply_partitions,
+    check_errors,
+    clean_column,
+    create_report_new,
+    is_null,
+    validate_values,
+)
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 
 def clean_date(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     column: str,
     output_format: str = "YYYY-MM-DD hh:mm:ss",
     input_timezone: str = "UTC",
@@ -132,61 +141,55 @@ def clean_date(
             f"fix_missing {fix_missing} is invalid. "
             'It needs to be "minimum", "current" or "empty".'
         )
-    if input_timezone not in all_timezones and input_timezone not in ZONE:
-        raise ValueError(f"origin_timezone {input_timezone} does not exist")
+    if input_timezone not in ALL_TIMEZONES and input_timezone not in ZONE:
+        raise ValueError(f"input_timezone {input_timezone} is invalid.")
     if (
-        output_timezone not in all_timezones
+        output_timezone not in ALL_TIMEZONES
         and output_timezone not in ZONE
         and output_timezone != ""
     ):
         raise ValueError(f"output_timezone {output_timezone} is invalid.")
 
-    # convert to dask
-    df = to_dask(df)
+    check_errors(errors)
 
-    is_day_first = None
+    # the output format only needs to be parsed once
+    parsed_output_format = _parse_output_format(output_format, output_timezone)
+    if not parsed_output_format.valid:
+        raise ValueError(
+            f"output_format {output_format} is invalid. "
+            f"Invalid tokens are {parsed_output_format.invalid_tokens}."
+        )
+
+    is_day_first: Optional[bool] = False
     if infer_day_first:
-        is_day_first = _is_day_first(df[column])
-    else:
-        is_day_first = False
+        is_day_first = _is_day_first(df, column)
 
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    df["clean_code_tup"] = df[column].map_partitions(
-        lambda srs: [
-            _format_date(
-                x, output_format, input_timezone, output_timezone, fix_missing, is_day_first, errors
-            )
-            for x in srs
-        ],
-        meta=object,
+    df, stats = clean_column(
+        df,
+        column,
+        partial(
+            _format_date,
+            output_format=output_format,
+            input_timezone=input_timezone,
+            output_timezone=output_timezone,
+            fix_missing=fix_missing,
+            is_day_first=is_day_first,
+            errors=errors,
+            parsed_output_format=parsed_output_format,
+        ),
+        [f"{column}_clean"],
+        inplace=inplace,
+        progress=progress,
     )
-    df = df.assign(
-        _temp_=df["clean_code_tup"].map(itemgetter(0)),
-        _code_=df["clean_code_tup"].map(itemgetter(1)),
-    )
-    df = df.rename(columns={"_temp_": f"{column}_clean"})
 
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    if inplace:
-        df = df.drop(columns=column)
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
-
-    # output a report describing the result of clean_country
+    # output a report describing the result of clean_date
     if report:
         create_report_new("Dates", stats, errors)
 
     return df
 
 
-def validate_date(date: Union[str, pd.Series]) -> Union[bool, pd.Series]:
+def validate_date(date: str | pd.Series) -> bool | pd.Series:
     """
     Validate dates and times.
 
@@ -206,24 +209,21 @@ def validate_date(date: Union[str, pd.Series]) -> Union[bool, pd.Series]:
     1    False
     Name: date, dtype: bool
     """
-    if isinstance(date, pd.Series):
-        return date.apply(check_date, args=(False,))
-    return check_date(date, False)
+    return validate_values(date, partial(check_date, clean=False))
 
 
-def _is_day_first(date: Union[str, dd.Series]) -> Optional[bool]:
+def _is_day_first(df: pd.DataFrame | dd.DataFrame, column: str) -> bool:
     """
-    Inferring if the first number of ambiguous string is the day.
+    Infer whether the dates in the column are written with the day before the month.
 
-    Parameters
-    ----------
-    date
-        pandas Series of dates or a date string
+    Returns True if at least one date can only be read as day-first
+    (for example "25/09/2003"), otherwise False.
     """
-    if isinstance(date, dd.Series):
-        judge_col = date.apply(_check_is_day_first, meta=object)
-        return (judge_col.unique() == True).any().compute()
-    return _check_is_day_first(date)
+
+    def _any_day_first(pdf: pd.DataFrame) -> bool:
+        return any(_check_is_day_first(val) is True for val in pdf[column].tolist())
+
+    return any(apply_partitions(df, _any_day_first))
 
 
 def _check_is_day_first(val: Any) -> Optional[bool]:
@@ -235,6 +235,8 @@ def _check_is_day_first(val: Any) -> Optional[bool]:
     val
         date string
     """
+    if is_null(val):
+        return None
     date = str(val)
     is_day_first = None
     status = check_date(date, True)
@@ -256,6 +258,7 @@ def _format_date(
     fix_missing: str,
     is_day_first: Optional[bool],
     errors: str,
+    parsed_output_format: Optional[ParsedTargetFormat] = None,
 ) -> Tuple[Any, int]:
     """
     This function cleans date string.
@@ -265,6 +268,8 @@ def _format_date(
         same as explained in clean_date function
     """
     # pylint: disable=too-many-arguments
+    if is_null(val):
+        return np.nan, 0
     date = str(val)
     status = check_date(date, True)
     if status == "null":
@@ -279,9 +284,8 @@ def _format_date(
         parsed_date_data.set_tzinfo(timezone=input_timezone)
         parsed_date_data = _set_parseddate_timezone_offset(input_timezone, parsed_date_data)
         # Handle target format and timezone
-        parsed_output_format_data = _check_output_format(output_format)
-        parsed_output_format_data = _set_parsedtargetformat_timezone_offset(
-            output_timezone, parsed_output_format_data
+        parsed_output_format_data = parsed_output_format or _parse_output_format(
+            output_format, output_timezone
         )
         if parsed_output_format_data.valid:
             if parsed_date_data.valid == "cleaned":
@@ -300,6 +304,22 @@ def _format_date(
             )
 
 
+def _parse_output_format(output_format: str, output_timezone: str) -> ParsedTargetFormat:
+    """
+    Parse the output format string and attach the offset of the output timezone.
+    """
+    return _set_parsedtargetformat_timezone_offset(
+        output_timezone, _check_output_format(output_format)
+    )
+
+
+def _utcoffset(timezone: str, date: datetime.datetime) -> Optional[timedelta]:
+    """
+    Returns the UTC offset of an IANA timezone at the given (naive, local) date.
+    """
+    return ZoneInfo(timezone).utcoffset(date)
+
+
 def _set_parseddate_timezone_offset(timezone: str, parsed_data: ParsedDate) -> ParsedDate:
     """
     This function set timezone information for parsed date or parsed target format
@@ -311,12 +331,12 @@ def _set_parseddate_timezone_offset(timezone: str, parsed_data: ParsedDate) -> P
         parsed date or parsed target format
     """
     example_date = datetime.datetime(2009, 9, 1)
-    if timezone in all_timezones:
+    if timezone in ALL_TIMEZONES:
         days, seconds = 0, 0
-        pytz_offset = pytz.timezone(timezone).utcoffset(example_date)
-        if pytz_offset is not None:
-            days = pytz_offset.days
-            seconds = pytz_offset.seconds
+        tz_offset = _utcoffset(timezone, example_date)
+        if tz_offset is not None:
+            days = tz_offset.days
+            seconds = tz_offset.seconds
         parsed_data.set_tzinfo(utc_offset_hours=int(abs(days) * 24 + abs(seconds) / 3600))
         parsed_data.set_tzinfo(
             utc_offset_minutes=int((abs(seconds) - (abs(seconds) / 3600) * 3600) / 60)
@@ -347,12 +367,12 @@ def _set_parsedtargetformat_timezone_offset(
         parsed date or parsed target format
     """
     example_date = datetime.datetime(2009, 9, 1)
-    if timezone in all_timezones:
+    if timezone in ALL_TIMEZONES:
         days, seconds = 0, 0
-        pytz_offset = pytz.timezone(timezone).utcoffset(example_date)
-        if pytz_offset is not None:
-            days = pytz_offset.days
-            seconds = pytz_offset.seconds
+        tz_offset = _utcoffset(timezone, example_date)
+        if tz_offset is not None:
+            days = tz_offset.days
+            seconds = tz_offset.seconds
         parsed_data.set_tzinfo(utc_offset_hours=int(abs(days) * 24 + abs(seconds) / 3600))
         parsed_data.set_tzinfo(
             utc_offset_minutes=int((abs(seconds) - (abs(seconds) / 3600) * 3600) / 60)
@@ -381,7 +401,7 @@ def _check_output_format(output_format: str) -> ParsedTargetFormat:
     """
     result = ParsedTargetFormat()
     target_tokens = split(output_format, JUMP)
-    remain_tokens = deepcopy(target_tokens)
+    remain_tokens = list(target_tokens)
     # Handle Timezone
     result, remain_tokens = _figure_output_format_timezone(result, target_tokens, remain_tokens)
     # Handle year, month, day
@@ -415,7 +435,7 @@ def _figure_output_format_timezone(
         remained tokens after figuring tokens
     """
     for token in target_tokens:
-        if token in all_timezones:
+        if token in ALL_TIMEZONES:
             parsed_data.set_tzinfo(timezone=token)
             remain_tokens.remove(token)
     for token in target_tokens:
@@ -498,10 +518,10 @@ def _figure_output_format_hms(
         remain_str = ""
         for token in remain_tokens:
             if (
-                not token in TARGET_MONTH
-                and not token in TARGET_WEEKDAY
-                and not token in AM
-                and not token in PM
+                token not in TARGET_MONTH
+                and token not in TARGET_WEEKDAY
+                and token not in AM
+                and token not in PM
             ):
                 remain_str = token
         parsed_data, hms_tokens = _get_output_format_hms_tokens(parsed_data, remain_str)
@@ -564,9 +584,9 @@ def _ensure_ymd(
         signal of inferring result.
     """
     result = ParsedDate()
-    result, remain_tokens = _ensure_year(result, tokes, deepcopy(tokes))
+    result, remain_tokens = _ensure_year(result, tokes, list(tokes))
     if len(remain_tokens) == 0:
-        return result, remain_tokens, not is_day_first is None
+        return result, remain_tokens, is_day_first is not None
     num_tokens = []
     for token in remain_tokens:
         if token.isnumeric():
@@ -832,23 +852,23 @@ def _change_timezone(parsed_date_data: ParsedDate, output_timezone: str) -> Pars
         second=parsed_date_data.hms["second"],
     )
     origin_add, target_add = 0, 0
-    if parsed_date_data.tzinfo["timezone"] in all_timezones:
-        pytz_offset = pytz.timezone(str(parsed_date_data.tzinfo["timezone"])).utcoffset(origin_date)
-        if not pytz_offset is None:
-            origin_add = -1 if pytz_offset.days > 0 and pytz_offset.seconds > 0 else 1
+    if parsed_date_data.tzinfo["timezone"] in ALL_TIMEZONES:
+        tz_offset = _utcoffset(str(parsed_date_data.tzinfo["timezone"]), origin_date)
+        if tz_offset is not None:
+            origin_add = -1 if tz_offset.days > 0 and tz_offset.seconds > 0 else 1
             origin_tz_offset = timedelta(
-                days=abs(pytz_offset.days), seconds=abs(pytz_offset.seconds)
+                days=abs(tz_offset.days), seconds=abs(tz_offset.seconds)
             )
     elif parsed_date_data.tzinfo["timezone"] in ZONE:
         origin_add = -1 if ZONE[str(parsed_date_data.tzinfo["timezone"])] > 0 else 1
         offset_value = abs(ZONE[str(parsed_date_data.tzinfo["timezone"])]) * 3600
         origin_tz_offset = timedelta(days=0, seconds=offset_value)
-    if output_timezone in all_timezones:
-        pytz_offset = pytz.timezone(output_timezone).utcoffset(origin_date)
-        if not pytz_offset is None:
-            target_add = 1 if pytz_offset.days >= 0 and pytz_offset.seconds >= 0 else -1
+    if output_timezone in ALL_TIMEZONES:
+        tz_offset = _utcoffset(output_timezone, origin_date)
+        if tz_offset is not None:
+            target_add = 1 if tz_offset.days >= 0 and tz_offset.seconds >= 0 else -1
             target_tz_offset = timedelta(
-                days=abs(pytz_offset.days), seconds=abs(pytz_offset.seconds)
+                days=abs(tz_offset.days), seconds=abs(tz_offset.seconds)
             )
     elif output_timezone in ZONE:
         target_add = 1 if ZONE[output_timezone] >= 0 else -1
@@ -896,7 +916,7 @@ def _transform_year(result_str: str, year_token: str, year: int) -> str:
     year
         value of year
     """
-    result = deepcopy(result_str)
+    result = result_str
     if year_token != "":
         if year == -1:
             if len(year_token) == 4:
@@ -929,7 +949,7 @@ def _transform_month(result_str: str, month_token: str, month: int) -> str:
     month
         value of month
     """
-    result = deepcopy(result_str)
+    result = result_str
     if month_token != "":
         if month == -1:
             if len(month_token) == 3:
@@ -967,7 +987,7 @@ def _transform_day(result_str: str, day_token: str, day: int) -> str:
     day
         value of day
     """
-    result = deepcopy(result_str)
+    result = result_str
     if day_token != "":
         if day == -1:
             if len(day_token) == 2:
@@ -997,7 +1017,7 @@ def _transform_hms(result_str: str, hms_token: str, ispm: bool, hms_value: int) 
     hms_value
         value of hour, minute or second
     """
-    result = deepcopy(result_str)
+    result = result_str
     if hms_token != "":
         if hms_value == -1:
             if len(hms_token) == 2:
@@ -1029,7 +1049,7 @@ def _transform_weekday(result_str: str, weekday_token: str, weekday: int) -> str
     weekday
         value of weekday
     """
-    result = deepcopy(result_str)
+    result = result_str
     if weekday_token != "":
         if weekday == -1:
             if len(weekday_token) == 3:
@@ -1066,7 +1086,7 @@ def _transform_timezone(
         information of timezone, including offset hours and mins comparing to UTC
     """
     # pylint: disable=too-many-arguments
-    result = deepcopy(result_str)
+    result = result_str
     if timezone_token != "":
         if timezone_token == "z":
             result = result.replace(timezone_token, timezone)
@@ -1103,7 +1123,7 @@ def _transform(
     output_timezone
         target timezone string
     """
-    result = deepcopy(output_format)
+    result = output_format
     if output_timezone != "":
         parsed_date_data = _change_timezone(parsed_date_data, output_timezone)
     # Handle year

@@ -8,13 +8,11 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
-from ...datasets import load_dataset
 
-from ...eda import plot
-from ...eda.dtypes_v2 import Nominal, LatLong
-from ...eda.utils import to_dask
 from ...datasets import load_dataset
-from .random_data_generator import random_df
+from ...eda import plot
+from ...eda.dtypes_v2 import LatLong, Nominal
+from ...eda.utils import to_dask
 
 LOGGER = logging.getLogger(__name__)
 
@@ -123,7 +121,7 @@ def test_plot_dt() -> None:
             "4/13/2003",
         ]
     )
-    dt_col = pd.to_datetime(srs, infer_datetime_format=True)
+    dt_col = pd.to_datetime(srs, format="%m/%d/%Y")
     df = pd.DataFrame()
     df["dt"] = dt_col
     df["num"] = [1.0, 2.1, 3.5, 4.5, 2.5, 1.5, 2.3, 6.1, 8.1, 1.0, 3, 10.6, 7.8, 9.1, 20.6]

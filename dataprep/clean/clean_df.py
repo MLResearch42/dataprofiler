@@ -6,25 +6,16 @@ cleaning and standardizing a full Pandas DataFrame.
 # pylint: disable-msg=relative-beyond-top-level
 # pylint: disable-msg=cyclic-import
 
-import operator
-from typing import Dict, Any, Union, Tuple
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import infer_dtype, is_float_dtype, is_integer_dtype, is_object_dtype
 
-from pandas.api.types import infer_dtype
-
-# from ..eda.progress_bar import ProgressBar
-
-from .clean_email import validate_email
-from .clean_country import validate_country
-from .clean_phone import validate_phone
-from .clean_url import validate_url
-from .clean_lat_long import validate_lat_long
-from .clean_ip import validate_ip
-from .clean_address import validate_address
 from .clean_headers import clean_headers
-from .utils import NULL_VALUES
+from .utils import apply_partitions, is_dask, is_null
 
 
 def clean_df(
@@ -98,6 +89,10 @@ def clean_df(
     """
     # pylint: disable=too-many-arguments
     # pylint: disable-msg=too-many-locals
+    if is_dask(df):
+        # the whole DataFrame is cleaned in memory
+        parts = apply_partitions(df, lambda pdf: pdf)
+        df = parts[0] if len(parts) == 1 else pd.concat(parts)
     # pylint:disable=too-many-branches
     # type: ignore
 
@@ -180,173 +175,158 @@ def clean_df(
         return df
 
 
-def _check_valid_values(data: str) -> bool:
+def _not_null_mask(column: pd.Series) -> np.ndarray:
     """
-    Function to check if data is valid or belongs to NULL_VALUES.
-    if valid, return True. Otherwise return False.
-
+    Boolean array that is True where the value of the column is not null
+    (not NaN/None/NA and not a null string such as "", "NULL" or "nan").
     """
-    not_valid = data in NULL_VALUES or pd.isna(data)
-    return not not_valid
+    return np.fromiter((not is_null(val) for val in column.tolist()), dtype=bool, count=len(column))
 
 
-def _check_null_values(data: str) -> bool:
+def _count_valid(validate: Callable[..., Any], column: pd.Series, **kwargs: Any) -> int:
     """
-    Reversed version of function _check_valid_values() to check if data is invalid.
-
+    Number of values of the column accepted by a validate_* function.
     """
-    not_valid = data in NULL_VALUES or pd.isna(data)
-    return bool(not_valid)
+    return int(pd.Series(validate(column, **kwargs)).sum())
 
 
 def _infer_semantic_data_type(column: pd.Series) -> Any:
     """
-    Function to infer the semantic data type for a column.
-
-    We extract non-NA values and use a subset to infer. A valid semantic data type will be returned
-    if at least half of the entries in the subset match. The order of determination is:
-        1. if the header contains "lat" or "long", try to infer the "coordinate" data type.
-        2. numeric ("integer" or "floating") or "boolean".
-        3. string (email, country, phone, etc.) for which we desinged validating functions.
-        4. other types ("date" or "string") from the best infer by Pandas.
+    Infer the semantic data type of a column.
+    The semantic data type is the logical or business meaning of a column:
+    "email", "country", "phone", "coordinate", "ip", "URL" or "address". If the
+    column has no such meaning, its atomic data type is returned.
 
     Parameters
     ----------
     column
-        A column of a Pandas DataFrame to be checked.
+        A column (pandas Series) of the DataFrame.
     """
+    # pylint: disable=import-outside-toplevel
+    from .clean_country import validate_country
+    from .clean_email import validate_email
+    from .clean_ip import validate_ip
+    from .clean_lat_long import validate_lat_long
+    from .clean_phone import validate_phone
+    from .clean_url import validate_url
 
-    # extract non-NA values and a subset to infer the data type
-    column_not_na = column[column.apply(_check_valid_values, 0)]
+    # Remove null values, and select a sample of the column to infer the type from
+    column_not_na = column[_not_null_mask(column)]
     sample_size = (
         column_not_na.size if column_not_na.size <= 100 else min(int(0.1 * column_not_na.size), 500)
     )
     column_not_na_subset = column_not_na.sample(n=sample_size, random_state=1)
+    half = column_not_na_subset.size / 2
 
-    # 1. For geographic coordinates: lat and long
+    # Coordinates are recognized by the name of the column
     lat_lon = ["lat", "Lat", "LAT", "lon", "Lon", "LON"]
-    if any(x in column.name for x in lat_lon):
-        lat_long_infer_count = sum(
-            pd.Series(validate_lat_long(column_not_na_subset, lat_long=False, lat=True)).tolist()
-        )
-        # return if at least half of the entries match
-        if lat_long_infer_count > (column_not_na_subset.size / 2):
+    if any(x in str(column.name) for x in lat_lon):
+        if _count_valid(validate_lat_long, column_not_na_subset, lat_long=False, lat=True) > half:
             return "coordinate"
 
-    # 2. For numeric ("integer", "floating") or boolean data types
-    if infer_dtype(column_not_na_subset) != "string":
-        return infer_dtype(column_not_na_subset)
-
-    # 3. For string and semantic data types (email, country, phone, etc.)
+    # Only columns of strings can have one of the other semantic data types
     default_infer_dtype = infer_dtype(column_not_na_subset)
-
-    semantic_data_type_dic = {"email": 0, "country": 0, "phone": 0, "ip": 0, "URL": 0, "address": 0}
-
-    semantic_data_type_dic["email"] = sum(pd.Series(validate_email(column_not_na_subset)).tolist())
-    semantic_data_type_dic["country"] = sum(
-        pd.Series(validate_country(column_not_na_subset)).tolist()
-    )
-    semantic_data_type_dic["phone"] = sum(pd.Series(validate_phone(column_not_na_subset)).tolist())
-    semantic_data_type_dic["ip"] = sum(pd.Series(validate_ip(column_not_na_subset)).tolist())
-    semantic_data_type_dic["URL"] = sum(pd.Series(validate_url(column_not_na_subset)).tolist())
-    semantic_data_type_dic["address"] = sum(
-        pd.Series(validate_address(column_not_na_subset)).tolist()
-    )
-
-    if all(value == 0 for value in semantic_data_type_dic.values()):
-        # no semantic data types match, return the default one
+    if default_infer_dtype != "string":
         return default_infer_dtype
-    # else, return the best inferred semantic data type
-    best_infer = max(semantic_data_type_dic.items(), key=operator.itemgetter(1))[0]
-    best_infer_count = max(semantic_data_type_dic.items(), key=operator.itemgetter(1))[1]
-    return best_infer if best_infer_count > (column_not_na_subset.size / 2) else default_infer_dtype
+
+    semantic_data_type_dic = {
+        "email": _count_valid(validate_email, column_not_na_subset),
+        "country": _count_valid(validate_country, column_not_na_subset),
+        "phone": _count_valid(validate_phone, column_not_na_subset),
+        "ip": _count_valid(validate_ip, column_not_na_subset),
+        "URL": _count_valid(validate_url, column_not_na_subset),
+        "address": _count_valid_addresses(column_not_na_subset),
+    }
+
+    best_infer, best_infer_count = max(semantic_data_type_dic.items(), key=lambda item: item[1])
+    if best_infer_count == 0:
+        return default_infer_dtype
+    return best_infer if best_infer_count > half else default_infer_dtype
+
+
+def _count_valid_addresses(column: pd.Series) -> int:
+    """
+    Number of values of the column that are valid addresses. Address detection
+    needs the optional python-crfsuite package and is skipped if it is missing.
+    """
+    from .clean_address import validate_address  # pylint: disable=import-outside-toplevel
+
+    try:
+        return _count_valid(validate_address, column)
+    except ImportError:
+        return 0
 
 
 def _infer_atomic_data_type(column: pd.Series) -> Any:
     """
-    Function to infer the atomic data type for a column.
+    Infer the atomic data type of a column, ignoring its null values.
+    The atomic data types are the names returned by pandas.api.types.infer_dtype,
+    for example "string", "integer", "floating" or "date".
 
     Parameters
     ----------
     column
-        A Column of a Pandas DataFrame to be checked.
+        A column (pandas Series) of the DataFrame.
     """
-
-    return infer_dtype(column[column.apply(_check_valid_values, 0)])
+    return infer_dtype(column[_not_null_mask(column)])
 
 
 def _infer_data_type_df(df: pd.DataFrame, data_type_detection: str) -> pd.DataFrame:
     """
-    Function to infer the best data type for a whole data frame.
+    Infer the data type of every column of the DataFrame.
 
     Parameters
     ----------
     df
-        A Pandas dataframe containing the data.
+        A Pandas DataFrame containing the data to be cleaned.
     data_type_detection
-        The desired way to check data types.
-        * If ’semantic’, then perform a column-wise semantic and atomic type detection.
-        * If 'atomic', then return the best inferred atomic data type from Python default ones.
-        * If 'none', then no results will be returned.
+        If "semantic", infer the semantic and the atomic data type of each column.
+        If "atomic", only infer the atomic data type of each column.
     """
-
+    atomic = [_infer_atomic_data_type(df.iloc[:, pos]) for pos in range(df.shape[1])]
     if data_type_detection == "semantic":
-        atomic_data_types_df = df.apply(_infer_atomic_data_type, 0).to_frame()
-        semantic_data_types_df = df.apply(_infer_semantic_data_type, 0).to_frame()
-        combined_data_types_df = pd.concat([semantic_data_types_df, atomic_data_types_df], axis=1)
-        combined_data_types_df.columns = ["semantic_data_type", "atomic_data_type"]
-        return combined_data_types_df
-    # else, perform the atomic detection only
-    atomic_data_types_df = df.apply(_infer_atomic_data_type, 0).to_frame()
-    atomic_data_types_df.columns = ["atomic_data_type"]
-    return atomic_data_types_df
-
-
-def _fill_missing_values_column(column: pd.Series) -> None:
-    """
-    Function to standardize the missing values for a column, depending on its data type detection:
-    1. For date, change to pd.NaT
-    3. For any other data type, change to np.nan
-
-    Parameters
-    ----------
-    column
-        Columns of a Pandas DataFrame to be standardized.
-    """
-
-    if infer_dtype(column) == "date":
-        column[column.apply(_check_null_values, 0)] = pd.NaT
-        column = pd.to_datetime(column)
-    else:
-        column[column.apply(_check_null_values, 0)] = np.nan
+        semantic = [_infer_semantic_data_type(df.iloc[:, pos]) for pos in range(df.shape[1])]
+        return pd.DataFrame(
+            {"semantic_data_type": semantic, "atomic_data_type": atomic}, index=df.columns
+        )
+    return pd.DataFrame({"atomic_data_type": atomic}, index=df.columns)
 
 
 def _standardize_missing_values_df(
     df: pd.DataFrame, standardize_missing_values: str
 ) -> pd.DataFrame:
     """
-    Function to standardize the missing values for a whole dataframe.
+    Standardize the missing values of the DataFrame. A new DataFrame is returned,
+    the input DataFrame is not modified.
 
     Parameters
     ----------
     df
-        Pandas Dataframe to be standarized.
-    standardize_missing_values {‘fill’, ‘remove’, ’ignore’}
-        * If ’fill’, then all detected missing values will be set as np.NaN.
-        * If ‘remove’, then any rows with missing values will be deleted.
-        * If ‘ignore’, then no action will be taken.
+        A Pandas DataFrame containing the data to be cleaned.
+    standardize_missing_values
+        If "fill", null values (including null strings such as "NULL" or "nan") are
+        replaced by NaN, or by NaT in columns of dates.
+        If "remove", rows with any null value are removed.
+        If "ignore", the DataFrame is returned as is.
     """
-    if standardize_missing_values == "fill":
-        df.apply(_fill_missing_values_column, 0)
-        df = df.convert_dtypes()
-    elif standardize_missing_values == "remove":
-        df.apply(_fill_missing_values_column, 0)
-        df = df.convert_dtypes()
-        df.dropna(how="any", inplace=True)
-    elif standardize_missing_values == "ignore":
-        pass
+    if standardize_missing_values == "ignore":
+        return df
 
-    return df
+    columns = []
+    for pos in range(df.shape[1]):
+        column = df.iloc[:, pos]
+        null_mask = ~_not_null_mask(column)
+        if null_mask.any():
+            fill_value = pd.NaT if infer_dtype(column) == "date" else np.nan
+            column = column.astype(object).mask(null_mask, fill_value).infer_objects()
+        columns.append(column)
+    result = pd.concat(columns, axis=1) if columns else df.copy()
+    result.columns = df.columns
+    result = result.convert_dtypes()
+
+    if standardize_missing_values == "remove":
+        result = result.dropna(how="any")
+    return result
 
 
 def _create_report_df(stats: Dict[str, Any], old_stat: Any, option: str) -> None:
@@ -394,39 +374,38 @@ def _create_report_df(stats: Dict[str, Any], old_stat: Any, option: str) -> None
 def _downcast_memory(df: pd.DataFrame) -> pd.DataFrame:
     """
     Function to downcast the memory size of the DataFrame by using subtypes in
-    numerical columns; for categorical types, downcast from `object` to `category`.
+    numerical columns; columns of Python objects or of the default string type
+    are converted to `category`. A new DataFrame is returned.
     """
-    cols = df.dtypes.index.tolist()
-    types = df.dtypes.values.tolist()
-    for i, j in enumerate(types):
-        if "Int" in str(j) or "int" in str(j):
-            if (
-                df[cols[i]].min() > np.iinfo(np.int8).min
-                and df[cols[i]].max() < np.iinfo(np.int8).max
-            ):
-                df[cols[i]] = df[cols[i]].astype("Int8")
-            elif (
-                df[cols[i]].min() > np.iinfo(np.int16).min
-                and df[cols[i]].max() < np.iinfo(np.int16).max
-            ):
-                df[cols[i]] = df[cols[i]].astype("Int16")
-            elif (
-                df[cols[i]].min() > np.iinfo(np.int32).min
-                and df[cols[i]].max() < np.iinfo(np.int32).max
-            ):
-                df[cols[i]] = df[cols[i]].astype("Int32")
-            else:
-                df[cols[i]] = df[cols[i]].astype("Int64")
-        # Avoid forcing "float16" because it loses precision and is fragile
-        elif "Float" in str(j) or "float" in str(j):
-            if (
-                df[cols[i]].min() > np.finfo(np.float16).min
-                and df[cols[i]].max() < np.finfo(np.float32).max
-            ):
-                df[cols[i]] = pd.to_numeric(df[cols[i]], downcast="float")
-            else:
-                df[cols[i]] = df[cols[i]].astype("Float64")
-        elif "Object" in str(j) or "object" in str(j):
-            df[cols[i]] = df[cols[i]].astype("category")
+    df = df.copy(deep=False)
+    for pos, dtype in enumerate(df.dtypes.tolist()):
+        column = df.iloc[:, pos]
+        new_column = column
+        if is_integer_dtype(dtype) or is_float_dtype(dtype):
+            if column.notna().any():
+                new_column = _downcast_numeric(column)
+        elif is_object_dtype(dtype) or str(dtype) == "str":
+            try:
+                new_column = column.astype("category")
+            except TypeError:  # unhashable values such as lists or dictionaries
+                continue
+        if new_column is not column:
+            df.isetitem(pos, new_column)
 
     return df
+
+
+def _downcast_numeric(column: pd.Series) -> pd.Series:
+    """
+    Downcast a numerical column that has at least one value to the smallest subtype.
+    """
+    col_min, col_max = column.min(), column.max()
+    if is_integer_dtype(column.dtype):
+        for int_type, nullable_name in ((np.int8, "Int8"), (np.int16, "Int16"), (np.int32, "Int32")):
+            if col_min > np.iinfo(int_type).min and col_max < np.iinfo(int_type).max:
+                return column.astype(nullable_name)
+        return column.astype("Int64")
+
+    if col_min > np.finfo(np.float16).min and col_max < np.finfo(np.float32).max:
+        return pd.to_numeric(column, downcast="float")
+    return column.astype("Float64")

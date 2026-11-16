@@ -2,17 +2,29 @@
 Clean and validate a DataFrame column containing geographic coordinates.
 """
 
-import re
-from operator import itemgetter
-from typing import Any, Optional, Tuple, Union
+from __future__ import annotations
 
-import dask
-import dask.dataframe as dd
+import re
+from collections import Counter
+from functools import partial
+from itertools import chain
+from typing import TYPE_CHECKING, Any
+
 import numpy as np
 import pandas as pd
 
-from ..progress_bar import ProgressBar
-from .utils import NULL_VALUES, create_report_new, to_dask
+from .utils import (
+    add_columns,
+    apply_partitions,
+    check_errors,
+    clean_column,
+    create_report_new,
+    is_null,
+    validate_values,
+)
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 LAT_LONG_PATTERN = re.compile(
     r"""
@@ -79,11 +91,11 @@ LONG_PATTERN = re.compile(
 
 
 def clean_lat_long(
-    df: Union[pd.DataFrame, dd.DataFrame],
-    lat_long: Optional[str] = None,
+    df: pd.DataFrame | dd.DataFrame,
+    lat_long: str | None = None,
     *,
-    lat_col: Optional[str] = None,
-    long_col: Optional[str] = None,
+    lat_col: str | None = None,
+    long_col: str | None = None,
     output_format: str = "dd",
     split: bool = False,
     inplace: bool = False,
@@ -169,89 +181,94 @@ def clean_lat_long(
             f'output_format {output_format} is invalid, it must be "dd", "ddh", "dm", or "dms"'
         )
 
-    # convert to dask
-    df = to_dask(df)
-
-    # To clean, create a new column "clean_code_tup" which contains
-    # the cleaned values and code indicating how the initial value was
-    # changed in a tuple. Then split the column of tuples and count the
-    # amount of different codes to produce the report
-    def clean_lat_long_helper(df, col, col_name):
-        # A helper to clean a latitude and longitude column
-        df["clean_code_tup"] = df[col].map_partitions(
-            lambda srs: [_format_lat_or_long(x, output_format, errors, col_name) for x in srs],
-            meta=object,
-        )
-        df = df.assign(
-            _temp_=df["clean_code_tup"].map(itemgetter(0)),
-            _code_=df["clean_code_tup"].map(itemgetter(1)),
-        )
-        df = df.rename(columns={"_temp_": f"{col}_clean"})
-        if inplace:
-            df = df.drop(columns=col)
-        return df
+    if not (lat_long or lat_col or long_col):
+        raise ValueError("one of lat_long, lat_col or long_col must be specified")
+    check_errors(errors)
 
     if lat_long:
         # clean a latitude and longitude column
-        df["clean_code_tup"] = df[lat_long].map_partitions(
-            lambda srs: [_format_lat_long(x, output_format, split, errors) for x in srs],
-            meta=object,
+        new_columns = ["latitude", "longitude"] if split else [f"{lat_long}_clean"]
+        df, stats = clean_column(
+            df,
+            lat_long,
+            partial(_format_lat_long, output_format=output_format, split=split, errors=errors),
+            new_columns,
+            inplace=inplace,
+            progress=progress,
         )
-        if split:
-            df = df.assign(
-                latitude=df["clean_code_tup"].map(itemgetter(0)),
-                longitude=df["clean_code_tup"].map(itemgetter(1)),
-                _code_=df["clean_code_tup"].map(itemgetter(2)),
-            )
-        else:
-            df = df.assign(
-                _temp_=df["clean_code_tup"].map(itemgetter(0)),
-                _code_=df["clean_code_tup"].map(itemgetter(1)),
-            )
-            df = df.rename(columns={"_temp_": f"{lat_long}_clean"})
-        if inplace:
-            df = df.drop(columns=lat_long)
     else:
-        # clean a latitude column
-        if lat_col:
-            df = clean_lat_long_helper(df, lat_col, "lat")
-        # clean a longitude column
-        if long_col:
-            df = clean_lat_long_helper(df, long_col, "long")
-        # merge the cleaned latitude and longitude
-        if lat_col and long_col and not split:
-            if output_format == "dd":
-                df["latitude_longitude"] = df[[f"{lat_col}_clean", f"{long_col}_clean"]].apply(
-                    tuple, axis=1, meta=object
-                )
-            else:
-                df["latitude_longitude"] = df[f"{lat_col}_clean"] + ", " + df[f"{long_col}_clean"]
+        df, stats = _clean_separate_columns(
+            df, lat_col, long_col, output_format, split, inplace, errors, progress
+        )
 
-            # if seperate lat and long columns are merged, then all values are "cleaned"
-            df["_code_"] = 2
-            df = df.drop(columns=[f"{lat_col}_clean", f"{long_col}_clean"])
-
-    # counts of codes indicating how values were changed
-    stats = df["_code_"].value_counts(sort=False)
-    df = df.drop(columns=["clean_code_tup", "_code_"])
-
-    with ProgressBar(minimum=1, disable=not progress):
-        df, stats = dask.compute(df, stats)
-
-    # output a report describing the result of clean_lat_long
+    # output the report describing the changes to the column
     if report:
         create_report_new("Latitude and Longitude", stats, errors)
 
     return df
 
 
+def _clean_separate_columns(
+    df: pd.DataFrame | dd.DataFrame,
+    lat_col: str | None,
+    long_col: str | None,
+    output_format: str,
+    split: bool,
+    inplace: bool,
+    errors: str,
+    progress: bool,
+) -> tuple[pd.DataFrame, Counter[int]]:
+    """
+    Clean a latitude column and/or a longitude column. If both are given and
+    split is False, the cleaned values are merged into one "latitude_longitude" column.
+    """
+    # pylint: disable=too-many-arguments,too-many-locals
+    targets = [(col, hor_dir) for col, hor_dir in ((lat_col, "lat"), (long_col, "long")) if col]
+
+    def _clean_partition(pdf: pd.DataFrame) -> tuple[pd.DataFrame, list[list[tuple[Any, int]]]]:
+        return pdf, [
+            [_format_lat_or_long(val, output_format, errors, hor_dir) for val in pdf[col].tolist()]
+            for col, hor_dir in targets
+        ]
+
+    parts = apply_partitions(df, _clean_partition, progress)
+    pdf = parts[0][0] if len(parts) == 1 else pd.concat([part[0] for part in parts])
+
+    cleaned: list[list[Any]] = []
+    codes: list[int] = []
+    for position in range(len(targets)):
+        rows = list(chain.from_iterable(part[1][position] for part in parts))
+        cleaned.append([row[0] for row in rows])
+        codes = [row[1] for row in rows]
+
+    if len(targets) == 2 and not split:
+        # merge the cleaned latitude and longitude columns
+        if output_format == "dd":
+            merged: list[Any] = list(zip(cleaned[0], cleaned[1]))
+        else:
+            merged = [
+                np.nan if is_null(lat) or is_null(lon) else f"{lat}, {lon}"
+                for lat, lon in zip(cleaned[0], cleaned[1])
+            ]
+        new_columns: dict[str, list[Any]] = {"latitude_longitude": merged}
+        stats = Counter({2: len(merged)})
+    else:
+        new_columns = {f"{col}_clean": values for (col, _), values in zip(targets, cleaned)}
+        stats = Counter(codes)
+
+    pdf = add_columns(pdf, new_columns)
+    if inplace:
+        pdf = pdf.drop(columns=[col for col, _ in targets])
+    return pdf, stats
+
+
 def validate_lat_long(
-    x: Union[pd.Series, str, float, Tuple[float, float]],
+    x: pd.Series | str | float | tuple[float, float],
     *,
     lat_long: bool = True,
     lat: bool = False,
     lon: bool = False,
-) -> Union[bool, pd.Series]:
+) -> bool | pd.Series | None:
     """
     Validate latitude and longitude coordinates.
 
@@ -293,13 +310,9 @@ def validate_lat_long(
 
     if lat or lon:
         hor_dir = "lat" if lat else "long"
-        if isinstance(x, pd.Series):
-            return x.apply(_check_lat_or_long, args=(False, hor_dir))
-        return _check_lat_or_long(x, False, hor_dir)
-    elif lat_long:
-        if isinstance(x, pd.Series):
-            return x.apply(_check_lat_long, args=(False,))
-        return _check_lat_long(x, False)
+        return validate_values(x, partial(_check_lat_or_long, clean=False, hor_dir=hor_dir))
+    if lat_long:
+        return validate_values(x, partial(_check_lat_long, clean=False))
 
     return None
 
@@ -380,10 +393,10 @@ def _check_lat_long(val: Any, clean: bool) -> Any:
     # pylint: disable=too-many-boolean-expressions
     # if the value is null, return empty strings for the components
     # and the code 0 to indicate a null status
-    if val in NULL_VALUES:
+    if is_null(val):
         return (None,) * 8 + (0,) if clean else False
 
-    mch = re.match(LAT_LONG_PATTERN, re.sub(r"''", r'"', str(val)))
+    mch = LAT_LONG_PATTERN.match(str(val).replace("''", '"'))
     # check if the value was able to be parsed
     if not mch:
         return (None,) * 8 + (1,) if clean else False
@@ -455,7 +468,7 @@ def _format_lat_or_long(val: Any, output_format: str, errors: str, hor_dir: str)
     if output_format == "dd":
         fctr = 1 if hem in {"N", "E"} else -1
         res = round(fctr * dds, 4)
-    if output_format == "ddh":
+    elif output_format == "ddh":
         res = f"{round(dds, 4)}{chr(176)} {hem}"
     elif output_format == "dm":
         mins = round(60 * (dds - int(dds)), 4)
@@ -475,12 +488,12 @@ def _check_lat_or_long(val: Any, clean: bool, hor_dir: str) -> Any:
     Function to check if a coordinate instance is valid
     """
     # pylint: disable=too-many-boolean-expressions
-    if val in NULL_VALUES:
+    if is_null(val):
         return (None,) * 4 + (0,) if clean else False
 
     pat = LAT_PATTERN if hor_dir == "lat" else LONG_PATTERN
 
-    mch = re.match(pat, re.sub(r"''", r'"', str(val)))
+    mch = pat.match(str(val).replace("''", '"'))
     if not mch:
         return (None,) * 4 + (1,) if clean else False
     if not mch.group("deg"):

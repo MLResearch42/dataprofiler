@@ -3,8 +3,10 @@ This module is for performance testing of EDA module in github action.
 """
 
 from functools import partial
-import pandas as pd
 from typing import Any
+
+import pandas as pd
+
 from ...datasets import load_dataset
 from ...eda import create_report
 

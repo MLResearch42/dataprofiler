@@ -50,10 +50,10 @@
             let tbValue = i.lastElementChild.innerHTML;
             if (!isNaN(tbValue)) {
                 if (tbValue.includes('e+')) {
-                    let newValue = tbValue.replace('e+', '×10<sup>') + '</sup>';
+                    let newValue = tbValue.replace('e+', '&times;10<sup>') + '</sup>';
                     i.lastElementChild.innerHTML = newValue;
                 } else if (tbValue.includes('e-')) {
-                    let newValue = tbValue.replace('e', '×10<sup>') + '</sup>';
+                    let newValue = tbValue.replace('e', '&times;10<sup>') + '</sup>';
                     i.lastElementChild.innerHTML = newValue;
                 }
             }

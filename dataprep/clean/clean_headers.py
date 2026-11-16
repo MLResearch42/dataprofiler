@@ -2,15 +2,18 @@
 Clean and standardize column headers for a DataFrame.
 """
 
+from __future__ import annotations
+
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from unicodedata import normalize
 
-import dask.dataframe as dd
-import numpy as np
 import pandas as pd
 
-NULL_VALUES = {np.nan, "", None}
+from .utils import is_missing
+
+if TYPE_CHECKING:
+    import dask.dataframe as dd
 
 CASE_STYLES = {
     "snake",
@@ -26,12 +29,12 @@ CASE_STYLES = {
 
 
 def clean_headers(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     case: str = "snake",
     replace: Optional[Dict[str, str]] = None,
     remove_accents: bool = True,
     report: bool = True,
-) -> pd.DataFrame:
+) -> pd.DataFrame | dd.DataFrame:
     """
     Function to clean column headers (column names).
 
@@ -123,7 +126,7 @@ def _convert_case(name: Any, case: str) -> Any:
     case
         The desired case style of the column name.
     """
-    if name in NULL_VALUES:
+    if _is_null_header(name):
         name = "header"
 
     if case in {"snake", "kebab", "camel", "pascal", "const"}:
@@ -151,6 +154,13 @@ def _convert_case(name: Any, case: str) -> Any:
         name = " ".join(words).upper()
 
     return name
+
+
+def _is_null_header(name: Any) -> bool:
+    """
+    Return True if the column name is missing (None, NaN) or an empty string.
+    """
+    return name == "" if isinstance(name, str) else is_missing(name)
 
 
 def _split_strip_string(string: str) -> List[str]:
@@ -184,7 +194,7 @@ def _replace_values(name: Any, mapping: Dict[str, str]) -> Any:
     mapping
         Maps old values in the column name to the new values.
     """
-    if name in NULL_VALUES:
+    if _is_null_header(name):
         return name
 
     name = str(name)
